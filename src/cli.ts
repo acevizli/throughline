@@ -1,12 +1,15 @@
 import { Book } from "./pdf/book.js";
 import { chapters, segment } from "./ingest/segments.js";
+import { nameUnits } from "./ingest/name.js";
 import { DEFAULTS, toUnits, type Unit } from "./ingest/units.js";
 
-const path = process.argv[2];
-const targetMinutes = Number(process.argv[3]) || DEFAULTS.targetMinutes;
+const args = process.argv.slice(2);
+const shouldName = args.includes("--name");
+const [path, minutes] = args.filter((a) => !a.startsWith("--"));
+const targetMinutes = Number(minutes) || DEFAULTS.targetMinutes;
 
 if (!path) {
-  console.error("usage: tsx src/cli.ts <book.pdf> [targetMinutes]");
+  console.error("usage: tsx src/cli.ts <book.pdf> [targetMinutes] [--name]");
   process.exit(1);
 }
 
@@ -14,14 +17,21 @@ const started = Date.now();
 const book = await Book.open(path);
 const segments = segment(book);
 const grouped = chapters(segments);
-const units = toUnits(grouped, { ...DEFAULTS, targetMinutes });
+let units = toUnits(grouped, { ...DEFAULTS, targetMinutes });
+const structuralSeconds = ((Date.now() - started) / 1000).toFixed(1);
+
+const name = path.split("/").pop()!;
+if (shouldName) {
+  process.loadEnvFile(".env"); // never read here — only handed to the SDK
+  units = await nameUnits(units, name.replace(/\.pdf$/i, ""));
+}
 const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
-const name = path.split("/").pop();
 console.log(`\n${name}`);
 console.log(
   `${book.pageCount} pages · ${book.outline.length} outline nodes · ` +
-    `page labels ${book.pageLabels ? "yes" : "no"} · structural pass ${seconds}s\n`,
+    `page labels ${book.pageLabels ? "yes" : "no"} · structural pass ${structuralSeconds}s` +
+    `${shouldName ? ` · +naming, ${seconds}s total` : ""}\n`,
 );
 
 let chapter = "";

@@ -53,7 +53,16 @@ export function toUnits(chapters: Chapter[], options: UnitOptions = DEFAULTS): U
     }
   }
 
-  return units;
+  // Part dividers open a "chapter" of their own and contribute a page or two of
+  // framing before the first real chapter starts. Drop them — but only them: a
+  // genuinely short chapter (Clean Code's 10-minute "JUnit Internals") is still
+  // a unit, so the test is what the heading *is*, not merely that it's small.
+  const kept = units.filter((u) => {
+    const alone = units.filter((v) => v.chapter === u.chapter).length === 1;
+    return !(alone && (PART_DIVIDER.test(u.chapter) || u.prose < budget * 0.15));
+  });
+
+  return kept.map((u, i) => ({ ...u, id: `U${String(i + 1).padStart(2, "0")}` }));
 }
 
 /** Accumulate segments until the budget is met; fold a runt tail into the previous group. */
@@ -98,6 +107,8 @@ function build(group: Segment[], chapter: string, index: number, options: UnitOp
     covers: group.map((s) => s.title),
   };
 }
+
+const PART_DIVIDER = /^part\b/i;
 
 const NON_TEACHING =
   /^(contents?|table of contents|index|colophon|copyright|about the author|dedication|acknowledg|bibliograph|references?|further reading|glossary|preface|foreword)\b/i;

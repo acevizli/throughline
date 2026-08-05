@@ -25,6 +25,7 @@
   "homepage": "https://github.com/acevizli/throughline#readme",
   "private": "true",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "pdfjs-dist": "^6.2.108"
   },
   "devDependencies": {
