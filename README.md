@@ -2,9 +2,10 @@
 
 Turns a technical book into a course you can actually start.
 
-Point it at a PDF and it produces a prerequisite graph of concept-sized units — each with
-learning objectives, a primer on what to watch for, and the exact page range to read —
-displayed beside the rendered page. Answer the recall questions afterwards and they're
+Point it at a PDF and it produces a roadmap of concept-sized units — each with learning
+objectives, a primer on what to watch for, and the exact page range to read — displayed
+beside the rendered page. Each unit also tells you which earlier units it leans on, ranked
+by how often the book cites them. Answer the recall questions afterwards and they're
 graded against the book's own pages.
 
 Pilot book: *Designing Data-Intensive Applications* (613 pages, 12 chapters).
@@ -15,24 +16,28 @@ Pilot book: *Designing Data-Intensive Applications* (613 pages, 12 chapters).
 it, not a replacement for it. Nothing the system asserts is allowed to be untraceable to
 a page.
 
-That constraint is why the prerequisite graph is built from the book's own
-cross-references rather than the model's opinion. Kleppmann wrote the graph down himself
-— roughly 500 `Chapter N` references and 250 precise ones like `see "B-Trees" on page 79`
-across DDIA. Every edge in the graph carries the sentence and page that produced it, and
-you can click through to check it.
+That constraint is why "leans on" is built from the book's own cross-references rather
+than the model's opinion. Kleppmann cites himself constantly — 320 precise references
+like `see "B-Trees" on page 79` and 431 chapter references across DDIA — and every entry
+carries the sentence and page that produced it, so you can check it.
 
 ```
-goal: understand consensus
+UNIT 31 — Consensus
+Read pp. 364–373
 
-  U02 replication basics
-   └─ U09 replication lag
-       └─ U18 linearizability
-           └─ U29 total order broadcast
-               └─ U31 consensus ★
-
-  edge U18 ← U09 — cited, p.324:
-    "…replication lag (see “Replication Lag” on page 161)…"
+Leans on
+  U09 Replication lag     29 refs
+  U29 Total order bcast   24 refs
+  U18 Linearizability     21 refs
+     "…as discussed in 'Linearizability' on p.324"
+  [shaky? jump back]
 ```
+
+An earlier design made that a prerequisite DAG with goal-driven entry. Measurement killed
+it: 84% of DDIA's citations point backward and every chapter's prerequisites are earlier
+chapters, so "what must I read to reach Consensus" resolved to chapters 1–9 in order —
+the table of contents with extra steps. The citation *ranking* carried the signal; the
+graph didn't.
 
 ## Shape
 
