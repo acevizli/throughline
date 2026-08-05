@@ -49,7 +49,8 @@ SDK.
 
 ## Status
 
-Early. The design is charted as a [wayfinder map](.scratch/readhelper/map.md) — locked
-decisions, open questions as numbered tickets in
-[`.scratch/readhelper/issues/`](.scratch/readhelper/issues/), and the fog that isn't
-sharp enough to ticket yet. No application code exists.
+Early. The design is charted as a wayfinder map — **[issue #1](https://github.com/acevizli/throughline/issues/1)**
+holds the locked decisions, the fog that isn't sharp enough to ticket yet, and what's
+ruled out of scope. Its sub-issues are the open questions, wired with native GitHub
+dependencies so the frontier — what's actually takeable right now — renders in the issue
+UI. No application code exists.
