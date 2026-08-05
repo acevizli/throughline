@@ -25,3 +25,5 @@ books/
 
 # scratch output
 *.log
+next-env.d.ts
+*.tsbuildinfo

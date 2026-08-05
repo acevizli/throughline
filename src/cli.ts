@@ -1,7 +1,7 @@
-import { Book } from "./pdf/book.js";
-import { chapters, segment } from "./ingest/segments.js";
-import { nameUnits } from "./ingest/name.js";
-import { DEFAULTS, toUnits, type Unit } from "./ingest/units.js";
+import { Book } from "./pdf/book";
+import { chapters, segment } from "./ingest/segments";
+import { nameUnits } from "./ingest/name";
+import { DEFAULTS, toUnits, type Unit } from "./ingest/units";
 
 const args = process.argv.slice(2);
 const shouldName = args.includes("--name");

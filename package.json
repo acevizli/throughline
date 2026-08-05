@@ -9,7 +9,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "ingest": "tsx src/cli.ts",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   },
   "repository": {
     "type": "git",
@@ -26,10 +29,15 @@
   "private": "true",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
-    "pdfjs-dist": "^6.2.108"
+    "next": "^16.3.0",
+    "pdfjs-dist": "^6.2.108",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "tsx": "^4.23.7",
     "typescript": "^7.0.2"
   }

@@ -1,4 +1,4 @@
-import type { Chapter, Segment } from "./segments.js";
+import type { Chapter, Segment } from "./segments";
 
 /** A unit of study: one sitting, one coherent stretch of the book. */
 export interface Unit {

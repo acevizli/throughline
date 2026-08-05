@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Unit } from "./units.js";
+import type { Unit } from "./units";
 
 /**
  * Give each unit a title that names the concept it covers.

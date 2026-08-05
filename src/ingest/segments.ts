@@ -1,4 +1,4 @@
-import type { Book, OutlineNode } from "../pdf/book.js";
+import type { Book, OutlineNode } from "../pdf/book";
 
 /**
  * The smallest slice of a book the ingest will ever address: the run of pages

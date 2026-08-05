@@ -52,10 +52,31 @@ graph didn't.
 Stack: Next.js (App Router) · pdf.js for extraction *and* rendering · SQLite · Anthropic
 SDK.
 
+## Running it
+
+```bash
+npm install
+npm run dev            # http://localhost:3000
+```
+
+Pick a book from the picker (it lists PDFs in `~/Downloads`, biggest first — override with
+`THROUGHLINE_BOOKS`, a colon-separated list of paths). Ingest takes a couple of seconds;
+unit titles need `ANTHROPIC_API_KEY` in `.env` and add about fifteen seconds the first time
+a book is opened. Without a key you still get units, just structural titles.
+
+There's also a CLI that prints the unit list and exits:
+
+```bash
+npm run ingest -- ~/Downloads/book.pdf 35 --name
+```
+
 ## Status
 
-Early. The design is charted as a wayfinder map — **[issue #1](https://github.com/acevizli/throughline/issues/1)**
+Early, but usable. Ingest works and the reader works: units on the left, the actual
+rendered pages on the right. Not built yet — objectives, primers, recall questions,
+grading, and the "leans on" panel.
+
+The design is charted as a wayfinder map — **[issue #1](https://github.com/acevizli/throughline/issues/1)**
 holds the locked decisions, the fog that isn't sharp enough to ticket yet, and what's
 ruled out of scope. Its sub-issues are the open questions, wired with native GitHub
-dependencies so the frontier — what's actually takeable right now — renders in the issue
-UI. No application code exists.
+dependencies so the frontier — what's actually takeable right now — renders in the issue UI.
