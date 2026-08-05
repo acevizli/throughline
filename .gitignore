@@ -22,3 +22,6 @@ books/
 
 # macOS
 .DS_Store
+
+# scratch output
+*.log

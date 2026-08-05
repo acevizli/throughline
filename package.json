@@ -1,0 +1,35 @@
+{
+  "name": "throughline",
+  "version": "1.0.0",
+  "description": "Turns a technical book into a course you can actually start.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ingest": "tsx src/cli.ts",
+    "typecheck": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acevizli/throughline.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/acevizli/throughline/issues"
+  },
+  "homepage": "https://github.com/acevizli/throughline#readme",
+  "private": "true",
+  "dependencies": {
+    "pdfjs-dist": "^6.2.108"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.7",
+    "typescript": "^7.0.2"
+  }
+}
