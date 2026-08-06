@@ -116,6 +116,37 @@ export class Pages {
   }
 
   /**
+   * The text of a page range, as close to reading order as pdf.js gives it.
+   *
+   * This is what a briefing is written from: the author's own words for exactly
+   * the pages the unit spans. Nothing is summarised or selected on the way out
+   * — a unit's whole range is ~8k tokens, so there is no reason to sample it.
+   */
+  async text(from: number, to: number): Promise<string> {
+    const out: string[] = [];
+    for (let p = Math.max(1, from); p <= Math.min(this.pageCount, to); p++) {
+      const page = await this.doc.getPage(p);
+      const content = await page.getTextContent();
+      let line = "";
+      const lines: string[] = [];
+      for (const item of content.items as any[]) {
+        if (typeof item.str !== "string") continue;
+        line += item.str;
+        // pdf.js marks the end of a rendered line; without it every page comes
+        // out as one run-on string and the structure the model reads is lost.
+        if (item.hasEOL) {
+          lines.push(line.trim());
+          line = "";
+        }
+      }
+      if (line.trim()) lines.push(line.trim());
+      page.cleanup();
+      out.push(lines.filter(Boolean).join("\n"));
+    }
+    return out.join("\n\n");
+  }
+
+  /**
    * Render one page to a PNG.
    *
    * Server-side rather than shipping the PDF to the browser: it keeps pdf.js

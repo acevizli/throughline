@@ -45,9 +45,11 @@ button {
   text-align: left;
 }
 
+/* Wider than a bare list wants to be: the open unit's briefing expands inside
+   this column, so it has to hold a paragraph and five objectives legibly. */
 .app {
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: 420px 1fr;
   height: 100vh;
 }
 
@@ -519,4 +521,68 @@ button {
 .ghost.done {
   color: var(--done);
   border-color: color-mix(in srgb, var(--done) 50%, transparent);
+}
+
+/* ── the briefing, expanded under the open unit ─────────────────── */
+
+.brief {
+  padding: 2px 20px 18px 46px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  margin: 0 0 6px 18px;
+  font-size: 13.5px;
+}
+
+.brief.working,
+.brief.failed {
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding-block: 10px 14px;
+}
+
+.brief.failed {
+  color: var(--accent);
+}
+
+/* Named for what it is: the bridge into the pages, never a summary of them. */
+.primer {
+  color: var(--dim);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.objectives {
+  list-style: none;
+  counter-reset: objective;
+}
+
+.objectives li {
+  counter-increment: objective;
+  position: relative;
+  padding-left: 20px;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+
+.objectives li::before {
+  content: counter(objective);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.rewrite,
+.brief.failed .ghost {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.brief:hover .rewrite,
+.brief.failed .ghost {
+  opacity: 1;
 }

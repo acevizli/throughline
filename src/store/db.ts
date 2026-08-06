@@ -52,6 +52,18 @@ const MIGRATIONS = [
 
   CREATE INDEX unit_order ON unit (book_id, ord);
   `,
+  `
+  CREATE TABLE brief (
+    book_id    TEXT NOT NULL,
+    unit_id    TEXT NOT NULL,
+    primer     TEXT NOT NULL,
+    objectives TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    made_at    TEXT NOT NULL,
+    PRIMARY KEY (book_id, unit_id),
+    FOREIGN KEY (book_id, unit_id) REFERENCES unit(book_id, id) ON DELETE CASCADE
+  );
+  `,
 ];
 
 let handle: DatabaseSync | null = null;

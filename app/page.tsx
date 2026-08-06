@@ -351,10 +351,70 @@ function Sidebar({
                 </span>
               </button>
             </div>
+            {i === current && <Briefing key={unit.id} book={course.id} unit={unit} />}
           </div>
         );
       })}
     </nav>
+  );
+}
+
+/**
+ * The briefing for the open unit, expanded in place under its row.
+ *
+ * It lives in the roadmap rather than above the pages because it is read on the
+ * way into the unit and not during it: the right-hand pane belongs to the book.
+ */
+function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
+  const [brief, setBrief] = useState<
+    { primer: string; objectives: string[] } | { error: string } | null
+  >(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    setBrief(null);
+    fetch(`/api/brief?book=${book}&unit=${unit.id}${attempt ? "&fresh=1" : ""}`)
+      .then((r) => r.json())
+      .then((data) => live && setBrief(data))
+      .catch((cause) => live && setBrief({ error: (cause as Error).message }));
+    return () => {
+      live = false;
+    };
+  }, [book, unit.id, attempt]);
+
+  if (!brief) {
+    return (
+      <div className="brief working">
+        Reading pp. {unit.from}–{unit.to} and writing the briefing. Twenty seconds or so —
+        paid once, then it's on disk.
+      </div>
+    );
+  }
+
+  if ("error" in brief) {
+    return (
+      <div className="brief failed">
+        {brief.error}
+        <button className="ghost" onClick={() => setAttempt((n) => n + 1)}>
+          try again
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="brief">
+      {brief.primer && <p className="primer">{brief.primer}</p>}
+      <ol className="objectives">
+        {brief.objectives.map((objective) => (
+          <li key={objective}>{objective}</li>
+        ))}
+      </ol>
+      <button className="ghost rewrite" onClick={() => setAttempt((n) => n + 1)}>
+        rewrite
+      </button>
+    </div>
   );
 }
 

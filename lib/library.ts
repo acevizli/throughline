@@ -3,6 +3,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Book, Pages } from "../src/pdf/book";
 import { chapters, segment } from "../src/ingest/segments";
+import { MODEL, writeBrief, type Brief } from "../src/ingest/brief";
 import { nameUnits } from "../src/ingest/name";
 import { DEFAULTS, toUnits, type Unit } from "../src/ingest/units";
 import { database, SHELF, transaction } from "../src/store/db";
@@ -222,6 +223,99 @@ export async function forget(bookId: string): Promise<void> {
   db.prepare("DELETE FROM book WHERE id = ?").run(bookId);
   rendering.delete(bookId);
   if (row) await rm(row.file, { force: true });
+}
+
+/* ── briefings ─────────────────────────────────────────────────── */
+
+/** Calls in flight, so opening a unit twice in a second doesn't buy two briefings. */
+const writing = new Map<string, Promise<Brief>>();
+
+/**
+ * The briefing for one unit: read from the row if it's there, generated once if
+ * it isn't.
+ *
+ * This is the only model call that scales with reading rather than with books,
+ * so it is cached on disk beside progress: a unit is paid for the first time it
+ * is opened and never again, and re-reading the book costs nothing.
+ */
+export async function brief(bookId: string, unitId: string): Promise<Brief | { error: string }> {
+  const db = database();
+  const row = db
+    .prepare("SELECT primer, objectives FROM brief WHERE book_id = ? AND unit_id = ?")
+    .get(bookId, unitId) as { primer: string; objectives: string } | undefined;
+  if (row) return { primer: row.primer, objectives: JSON.parse(row.objectives) as string[] };
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { error: "No ANTHROPIC_API_KEY is set, so there is no briefing for this unit." };
+  }
+
+  const key = `${bookId}:${unitId}`;
+  let pending = writing.get(key);
+  if (!pending) {
+    pending = generate(bookId, unitId).finally(() => writing.delete(key));
+    writing.set(key, pending);
+  }
+
+  try {
+    return await pending;
+  } catch (error) {
+    return { error: `Couldn't write the briefing: ${(error as Error).message}` };
+  }
+}
+
+/** Throw away a unit's briefing so the next open writes a fresh one. */
+export function unbrief(bookId: string, unitId: string): void {
+  database().prepare("DELETE FROM brief WHERE book_id = ? AND unit_id = ?").run(bookId, unitId);
+}
+
+async function generate(bookId: string, unitId: string): Promise<Brief> {
+  const db = database();
+  const book = db.prepare("SELECT title FROM book WHERE id = ?").get(bookId) as
+    | { title: string }
+    | undefined;
+  const unit = db
+    .prepare("SELECT * FROM unit WHERE book_id = ? AND id = ?")
+    .get(bookId, unitId) as any;
+  if (!book || !unit) throw new Error("no such unit");
+
+  const opening = pages(bookId);
+  if (!opening) throw new Error("the book's file is missing from the shelf");
+  const text = await (await opening).text(unit.page_from, unit.page_to);
+
+  // Only what the reader has already been through: a primer that points forward
+  // would be orienting them against pages they haven't seen.
+  const preceding = db
+    .prepare("SELECT id, title, chapter FROM unit WHERE book_id = ? AND ord < ? ORDER BY ord")
+    .all(bookId, unit.ord) as { id: string; title: string; chapter: string }[];
+
+  const written = await writeBrief({
+    bookTitle: book.title,
+    unit: {
+      id: unit.id,
+      title: unit.title,
+      chapter: unit.chapter,
+      from: unit.page_from,
+      to: unit.page_to,
+      minutes: unit.minutes,
+      covers: JSON.parse(unit.covers) as string[],
+    },
+    text,
+    preceding,
+  });
+
+  db.prepare(
+    `INSERT OR REPLACE INTO brief (book_id, unit_id, primer, objectives, model, made_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    bookId,
+    unitId,
+    written.primer,
+    JSON.stringify(written.objectives),
+    MODEL,
+    new Date().toISOString(),
+  );
+
+  return written;
 }
 
 /**

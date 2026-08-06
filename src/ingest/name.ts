@@ -21,7 +21,7 @@ export async function nameUnits(units: Unit[], bookTitle: string): Promise<Unit[
     .join("\n");
 
   const response = await client.messages.create({
-    model: "claude-opus-5",
+    model: "claude-sonnet-4.6",
     max_tokens: 16000,
     thinking: { type: "adaptive" },
     output_config: {
