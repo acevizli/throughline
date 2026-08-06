@@ -3,8 +3,9 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Book, Pages } from "../src/pdf/book";
 import { chapters, segment } from "../src/ingest/segments";
-import { KEYS, MODEL, writeBrief, type Brief, type Key, type Question } from "../src/ingest/brief";
+import { KEYS, writeBrief, type Brief, type Key, type Question } from "../src/ingest/brief";
 import { nameUnits } from "../src/ingest/name";
+import { backend, MODEL, unready } from "../src/model/ask";
 import { DEFAULTS, toUnits, type Unit } from "../src/ingest/units";
 import { database, SHELF, transaction } from "../src/store/db";
 
@@ -121,10 +122,13 @@ export async function add(
     };
   }
 
-  // The one AI call in the system. Without a key the structural titles stand —
-  // "Summary" instead of "Transaction Isolation Recap", but nothing breaks.
+  // The one model call ingest makes. With no backend reachable the structural
+  // titles stand — "Summary" instead of "Transaction Isolation Recap" — but
+  // nothing breaks. Gated on the backend rather than on a key: the agent path
+  // needs no key, and checking for one here would have quietly skipped naming
+  // for every book added through the shelf.
   let named = false;
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (!unready()) {
     try {
       units = await nameUnits(units, title);
       named = true;
@@ -270,9 +274,8 @@ export async function brief(bookId: string, unitId: string): Promise<Brief | { e
     };
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { error: "No ANTHROPIC_API_KEY is set, so there is no briefing for this unit." };
-  }
+  const blocked = unready();
+  if (blocked) return { error: `${blocked} There is no briefing for this unit.` };
 
   const key = `${bookId}:${unitId}`;
   let pending = writing.get(key);
@@ -349,7 +352,10 @@ async function generate(bookId: string, unitId: string): Promise<Brief> {
       unitId,
       written.primer,
       JSON.stringify(written.objectives),
-      MODEL,
+      // Which backend wrote it, not just which model: two rows made by the same
+      // model through different paths are not the same artefact, and telling
+      // them apart afterwards is the whole point of keeping both.
+      `${backend()}:${MODEL}`,
       new Date().toISOString(),
       written.questions.length,
     );
