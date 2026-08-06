@@ -1,8 +1,15 @@
 # throughline
 
-Turns a technical PDF into a course: a prerequisite graph of concept-sized units, shown
-beside the rendered page, with AI-graded free recall. Pilot book is *Designing
-Data-Intensive Applications*.
+Turns a technical PDF into a course: a linear roadmap of concept-sized units, shown beside
+the rendered page, each with a primer, objectives, and page-anchored multiple choice marked
+mechanically. Pilot book is *Designing Data-Intensive Applications*.
+
+Two things this used to say and no longer does, because both were charted and then dropped
+on evidence — don't reintroduce either without reopening the map. The **prerequisite graph**
+became a linear roadmap plus a per-unit "leans on" panel: 84% of DDIA's citations point
+backward and every chapter's prerequisites are earlier chapters, so the transitive closure
+was the table of contents with extra steps. **AI-graded free recall** became model-authored
+multiple choice, marked by set comparison; no model call grades anything.
 
 ## The constraint that outranks everything
 
@@ -52,7 +59,13 @@ behind, not just a verdict.
 ## Stack
 
 Next.js (App Router, TypeScript) · pdf.js for extraction *and* rendering · SQLite ·
-Anthropic SDK. Nothing is scaffolded yet — prototypes install what they need.
+Claude Agent SDK, with the Anthropic SDK behind a switch.
+
+Every model call goes through `ask()` in `src/model/ask.ts` — one shape, written once in
+zod, handed to whichever backend `THROUGHLINE_BACKEND` selects. Don't call either SDK
+directly from a call site. The agent backend runs with no built-in tools, no MCP servers
+but its own, and no inherited settings; that isolation is the no-drift rule enforced
+mechanically, so treat `src/model/agent.ts`'s options as load-bearing rather than tidy.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

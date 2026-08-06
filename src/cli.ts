@@ -2,6 +2,7 @@ import { Book } from "./pdf/book";
 import { chapters, segment } from "./ingest/segments";
 import { nameUnits } from "./ingest/name";
 import { DEFAULTS, toUnits, type Unit } from "./ingest/units";
+import { backend } from "./model/ask";
 
 const args = process.argv.slice(2);
 const shouldName = args.includes("--name");
@@ -22,7 +23,10 @@ const structuralSeconds = ((Date.now() - started) / 1000).toFixed(1);
 
 const name = path.split("/").pop()!;
 if (shouldName) {
-  process.loadEnvFile(".env"); // never read here — only handed to the SDK
+  // Only the metered path wants the key, and the agent path must not see one:
+  // Claude Code resolves ANTHROPIC_API_KEY ahead of the login on this machine,
+  // so loading it here would quietly put the naming pass back on the meter.
+  if (backend() === "api") process.loadEnvFile(".env"); // never read here — only handed to the SDK
   units = await nameUnits(units, name.replace(/\.pdf$/i, ""));
 }
 const seconds = ((Date.now() - started) / 1000).toFixed(1);

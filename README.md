@@ -57,8 +57,8 @@ graph didn't.
   visible in seconds; unit content is generated on first open and cached.
 - **Generic engine.** DDIA is the pilot, not the target.
 
-Stack: Next.js (App Router) · pdf.js for extraction *and* rendering · SQLite · Anthropic
-SDK.
+Stack: Next.js (App Router) · pdf.js for extraction *and* rendering · SQLite · Claude Agent
+SDK, with the Anthropic SDK behind a switch.
 
 ## Running it
 
@@ -67,9 +67,16 @@ npm install
 npm run dev            # http://localhost:3000
 ```
 
+Model calls go through the Claude Code installed on this machine, under whatever it is
+logged in as — no API key, nothing metered. Set `THROUGHLINE_BACKEND=api` to send them to
+the Anthropic API instead, which needs `ANTHROPIC_API_KEY` in `.env`; that path exists to
+hold one backend's briefings against the other's, and every briefing row records which one
+wrote it. `THROUGHLINE_TRACE=1` prints what each agent call reached for and what it would
+have cost.
+
 **Open a book** picks a PDF from disk and adds it to the shelf. Ingest takes a couple of
-seconds; unit titles need `ANTHROPIC_API_KEY` in `.env` and add about ten seconds — **paid
-once per book, ever**. Without a key you still get units, just structural titles.
+seconds; unit titles add about ten more and are **paid once per book, ever**. With no
+backend reachable you still get units, just structural titles.
 
 After that the book lives on the shelf with its progress, and opens instantly. Tick a unit
 off as you finish it; the card shows how far in you are and where to resume.
@@ -78,8 +85,8 @@ Opening a unit for the first time writes its **briefing** — a primer, two to f
 objectives sized from how much prose the unit holds, and one question per objective — from
 the author's text for exactly those pages. One call writes all three, so the pages are read
 once. It takes about a minute and is then on disk: every open after that is a database
-read, and re-reading the book costs nothing. All of DDIA is 39 such calls. Without a key
-the unit still opens; it just says the briefing is unavailable.
+read, and re-reading the book costs nothing. All of DDIA is 39 such calls. If the backend
+can't be reached the unit still opens; it just says the briefing is unavailable.
 
 Ticking a unit off opens its **questions** over the pages. Four options, one or two of them
 correct, and you're not told which — so a blind guess is 10%, not 25%. Answer all of them

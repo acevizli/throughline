@@ -28,11 +28,13 @@
   "homepage": "https://github.com/acevizli/throughline#readme",
   "private": "true",
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.223",
     "@anthropic-ai/sdk": "^0.115.0",
     "next": "^16.3.0",
     "pdfjs-dist": "^6.2.108",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

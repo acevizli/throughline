@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { ask } from "../model/ask";
 
 /** The four option slots. Fixed, because arrays take no length constraint. */
 export const KEYS = ["a", "b", "c", "d"] as const;
@@ -66,8 +67,6 @@ export interface BriefRequest {
   preceding: Prior[];
 }
 
-export const MODEL = "claude-sonnet-4-6";
-
 const PRIMER_WORDS = 50;
 
 /**
@@ -86,7 +85,6 @@ export function objectiveCount(minutes: number): number {
 export async function writeBrief(request: BriefRequest): Promise<Brief> {
   const { bookTitle, unit, text, preceding } = request;
   const count = objectiveCount(unit.minutes);
-  const client = new Anthropic();
 
   const roadmap = preceding.length
     ? preceding.map((p) => `${p.id} ${p.title} (${p.chapter})`).join("\n")
@@ -97,48 +95,25 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
   // prefixItems), but it does enforce required object keys. So the option set is
   // structurally guaranteed to be exactly four, and only "one or two correct"
   // is left to enforce in code.
-  const option = {
-    type: "object",
-    properties: { text: { type: "string" }, page: { type: "integer" } },
-    required: ["text", "page"],
-    additionalProperties: false,
-  };
+  const option = z.strictObject({ text: z.string(), page: z.int() });
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    output_config: {
-      effort: "medium",
-      format: {
-        type: "json_schema",
-        schema: {
-          type: "object",
-          properties: {
-            primer: { type: "string" },
-            objectives: { type: "array", items: { type: "string" } },
-            questions: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  stem: { type: "string" },
-                  a: option,
-                  b: option,
-                  c: option,
-                  d: option,
-                  // enum *is* enforced, so a key outside a–d cannot come back.
-                  correct: { type: "array", items: { type: "string", enum: [...KEYS] } },
-                },
-                required: ["stem", "a", "b", "c", "d", "correct"],
-                additionalProperties: false,
-              },
-            },
-          },
-          required: ["primer", "objectives", "questions"],
-          additionalProperties: false,
-        },
-      },
+  const parsed = await ask({
+    emit: "emit_briefing",
+    emitDescription: "Record the briefing for this unit. Call this exactly once.",
+    shape: {
+      primer: z.string(),
+      objectives: z.array(z.string()),
+      questions: z.array(
+        z.strictObject({
+          stem: z.string(),
+          a: option,
+          b: option,
+          c: option,
+          d: option,
+          // enum *is* enforced, so a key outside a–d cannot come back.
+          correct: z.array(z.enum(KEYS)),
+        }),
+      ),
     },
     system:
       "You write the briefing that sits above a stretch of a technical book a reader is " +
@@ -146,67 +121,53 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
       "aim the reader at the author's pages, never to save them the trouble of reading " +
       "them. Everything you write must come from the pages you are given — never from " +
       "your own knowledge of the subject, however sure you are of it.",
-    messages: [
-      {
-        role: "user",
-        content:
-          `Book: ${bookTitle}\n` +
-          `Chapter: ${unit.chapter}\n` +
-          `Unit ${unit.id}: ${unit.title} — pages ${unit.from}–${unit.to}, about ${unit.minutes} minutes of reading\n` +
-          `Sections it covers: ${unit.covers.join(" | ")}\n\n` +
-          "The reader has already worked through these units, in this order:\n" +
-          `${roadmap}\n\n` +
-          "Write two things.\n\n" +
-          `**primer** — at most ${PRIMER_WORDS} words, and usually fewer. It has exactly one ` +
-          "job: name what the author takes as already known at the start of these pages, and " +
-          "where the reader met it. Refer to earlier units by id and title when the ground was " +
-          "covered above; say plainly that it is assumed but was never covered when it wasn't. " +
-          "Nothing else belongs here. Do not say what these pages are about, do not frame why " +
-          "the chapter exists, do not pose the question they answer, and do not state any " +
-          "definition, distinction or conclusion that appears in them. Return an empty string " +
-          "if the unit assumes nothing the reader has not already met.\n\n" +
-          `**objectives** — exactly ${count}. Each is one thing the reader should be able to do ` +
-          "after these pages, phrased as a capability: start with a verb (Explain, Compare, " +
-          "Trace, Derive, Predict). Use the author's own terms for the things involved. One " +
-          "capability per objective — do not bundle two into one with \"and\". If the pages " +
-          `teach more than ${count} load-bearing ideas, pick the ${count} that carry the most ` +
-          "weight and leave the rest to the pages; never mention anything the pages do not " +
-          "teach. No trailing punctuation.\n\n" +
-          `**questions** — exactly ${count}, one per objective, in the same order as the ` +
-          "objectives. Each checks whether the reader can actually do the thing that " +
-          "objective names, from memory, with the book closed.\n\n" +
-          "Each question has a stem and four options `a`–`d`. **One or two of them are " +
-          "correct — never zero, never three, and vary which.** The reader is not told how " +
-          "many, so a second correct option must be genuinely correct and a wrong one " +
-          "genuinely wrong; do not include a near-miss you would argue about.\n\n" +
-          "Wrong options are the misreadings these pages exist to prevent — a plausible " +
-          "confusion the author explicitly settles, the right answer to a neighbouring " +
-          "question, a true statement that does not answer this stem. Never obviously " +
-          "absurd filler.\n\n" +
-          "**Every option carries the page that settles it.** The pages below are marked " +
-          "`[[page N]]` before each page's text. For a correct option, cite the page where " +
-          "the author says so. For a wrong option, cite the page where the author says " +
-          "otherwise — the passage a reader would go to to see why it is wrong. Use only " +
-          `page numbers that appear as markers below (${unit.from}–${unit.to}); if you cannot ` +
-          "point at a page for an option, rewrite the option until you can.\n\n" +
-          "Ask about what the pages argue, not what they mention: nothing about which figure " +
-          "shows what, what a section is called, or which company an example came from. Never " +
-          "write an option that only makes sense to someone with the book open.\n\n" +
-          "The pages follow, each marked with its page number.\n\n" +
-          "-----\n" +
-          text,
-      },
-    ],
+    prompt:
+      `Book: ${bookTitle}\n` +
+      `Chapter: ${unit.chapter}\n` +
+      `Unit ${unit.id}: ${unit.title} — pages ${unit.from}–${unit.to}, about ${unit.minutes} minutes of reading\n` +
+      `Sections it covers: ${unit.covers.join(" | ")}\n\n` +
+      "The reader has already worked through these units, in this order:\n" +
+      `${roadmap}\n\n` +
+      "Write two things.\n\n" +
+      `**primer** — at most ${PRIMER_WORDS} words, and usually fewer. It has exactly one ` +
+      "job: name what the author takes as already known at the start of these pages, and " +
+      "where the reader met it. Refer to earlier units by id and title when the ground was " +
+      "covered above; say plainly that it is assumed but was never covered when it wasn't. " +
+      "Nothing else belongs here. Do not say what these pages are about, do not frame why " +
+      "the chapter exists, do not pose the question they answer, and do not state any " +
+      "definition, distinction or conclusion that appears in them. Return an empty string " +
+      "if the unit assumes nothing the reader has not already met.\n\n" +
+      `**objectives** — exactly ${count}. Each is one thing the reader should be able to do ` +
+      "after these pages, phrased as a capability: start with a verb (Explain, Compare, " +
+      "Trace, Derive, Predict). Use the author's own terms for the things involved. One " +
+      "capability per objective — do not bundle two into one with \"and\". If the pages " +
+      `teach more than ${count} load-bearing ideas, pick the ${count} that carry the most ` +
+      "weight and leave the rest to the pages; never mention anything the pages do not " +
+      "teach. No trailing punctuation.\n\n" +
+      `**questions** — exactly ${count}, one per objective, in the same order as the ` +
+      "objectives. Each checks whether the reader can actually do the thing that " +
+      "objective names, from memory, with the book closed.\n\n" +
+      "Each question has a stem and four options `a`–`d`. **One or two of them are " +
+      "correct — never zero, never three, and vary which.** The reader is not told how " +
+      "many, so a second correct option must be genuinely correct and a wrong one " +
+      "genuinely wrong; do not include a near-miss you would argue about.\n\n" +
+      "Wrong options are the misreadings these pages exist to prevent — a plausible " +
+      "confusion the author explicitly settles, the right answer to a neighbouring " +
+      "question, a true statement that does not answer this stem. Never obviously " +
+      "absurd filler.\n\n" +
+      "**Every option carries the page that settles it.** The pages below are marked " +
+      "`[[page N]]` before each page's text. For a correct option, cite the page where " +
+      "the author says so. For a wrong option, cite the page where the author says " +
+      "otherwise — the passage a reader would go to to see why it is wrong. Use only " +
+      `page numbers that appear as markers below (${unit.from}–${unit.to}); if you cannot ` +
+      "point at a page for an option, rewrite the option until you can.\n\n" +
+      "Ask about what the pages argue, not what they mention: nothing about which figure " +
+      "shows what, what a section is called, or which company an example came from. Never " +
+      "write an option that only makes sense to someone with the book open.\n\n" +
+      "The pages follow, each marked with its page number.\n\n" +
+      "-----\n" +
+      text,
   });
-
-  const block = response.content.find((b) => b.type === "text");
-  if (!block || block.type !== "text") throw new Error("no text block in briefing response");
-
-  const parsed = JSON.parse(block.text) as {
-    primer?: string;
-    objectives?: string[];
-    questions?: (Record<Key, Option> & { stem?: string; correct?: Key[] })[];
-  };
 
   const objectives = (parsed.objectives ?? [])
     .map((o) => o.trim())
