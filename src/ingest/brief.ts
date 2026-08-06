@@ -128,7 +128,7 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
       `Sections it covers: ${unit.covers.join(" | ")}\n\n` +
       "The reader has already worked through these units, in this order:\n" +
       `${roadmap}\n\n` +
-      "Write two things.\n\n" +
+      "Write three things.\n\n" +
       `**primer** — at most ${PRIMER_WORDS} words, and usually fewer. It has exactly one ` +
       "job: name what the author takes as already known at the start of these pages, and " +
       "where the reader met it. Refer to earlier units by id and title when the ground was " +

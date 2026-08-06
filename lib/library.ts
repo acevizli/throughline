@@ -122,10 +122,13 @@ export async function add(
     };
   }
 
-  // The one AI call in the system. Without a key the structural titles stand —
-  // "Summary" instead of "Transaction Isolation Recap", but nothing breaks.
+  // The one model call ingest makes. With no backend reachable the structural
+  // titles stand — "Summary" instead of "Transaction Isolation Recap" — but
+  // nothing breaks. Gated on the backend rather than on a key: the agent path
+  // needs no key, and checking for one here would have quietly skipped naming
+  // for every book added through the shelf.
   let named = false;
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (!unready()) {
     try {
       units = await nameUnits(units, title);
       named = true;

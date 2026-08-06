@@ -74,8 +74,9 @@ hold one backend's briefings against the other's, and every briefing row records
 wrote it. `THROUGHLINE_TRACE=1` prints what each agent call reached for and what it would
 have cost.
 
-**Open a book** picks a PDF from disk and adds it to the shelf. Ingest takes a couple of
-seconds; unit titles add about ten more and are **paid once per book, ever**. With no
+**Open a book** picks a PDF from disk and adds it to the shelf. The structural pass is a few
+seconds; naming DDIA's 39 units adds about 90 on the agent backend and about 45 on the API,
+and is **paid once per book, ever** — re-adding the same file is a hash lookup. With no
 backend reachable you still get units, just structural titles.
 
 After that the book lives on the shelf with its progress, and opens instantly. Tick a unit

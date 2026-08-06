@@ -55,7 +55,14 @@ export async function ask<Shape extends z.ZodRawShape>(
 ): Promise<z.infer<z.ZodObject<Shape>>> {
   const answer =
     backend() === "agent" ? await viaAgent(request) : await viaApi(request, schema(request.shape));
-  return answer as z.infer<z.ZodObject<Shape>>;
+
+  // Parsed rather than cast, even though both backends already constrain the
+  // shape — the agent through the tool's input schema, the API through
+  // decoding. That is exactly why a violation here is worth failing on: it
+  // means something broke upstream (a truncated response, a refusal, an SDK
+  // change), and a zod error naming the field beats handing `undefined` to a
+  // caller that will quietly treat it as an empty briefing.
+  return z.object(request.shape).parse(answer);
 }
 
 /**

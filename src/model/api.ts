@@ -24,6 +24,17 @@ export async function viaApi<Shape extends z.ZodRawShape>(
     messages: [{ role: "user", content: request.prompt }],
   });
 
+  // Both of these arrive as a successful response carrying unusable content, so
+  // they have to be read off `stop_reason` rather than caught. `max_tokens` is
+  // the one that actually bites: the JSON is cut mid-string, and without this
+  // the failure surfaces as a parse error pointing at a column number.
+  if (response.stop_reason === "refusal") {
+    throw new Error(`the model declined: ${response.stop_details?.explanation ?? "no reason given"}`);
+  }
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("the response hit max_tokens and is truncated");
+  }
+
   const block = response.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") throw new Error("no text block in the response");
   return JSON.parse(block.text);

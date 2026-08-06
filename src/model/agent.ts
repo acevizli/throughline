@@ -43,7 +43,10 @@ async function run<Shape extends z.ZodRawShape>(request: Ask<Shape>): Promise<un
       // belong in the same context.
       systemPrompt:
         `${request.system}\n\n` +
-        `Return your answer by calling the ${request.emit} tool exactly once. ` +
+        // Named as the model sees it. It resolves the bare name in practice,
+        // but the namespaced one is what `allowedTools` approves and what
+        // appears in its tool list, so there is nothing to resolve.
+        `Return your answer by calling the mcp__${SERVER}__${request.emit} tool exactly once. ` +
         "Everything it asks for, you have been given: do not go looking for more, " +
         "and do not write a reply alongside the call.",
       mcpServers: { [SERVER]: createSdkMcpServer({ name: SERVER, tools: [emit] }) },
