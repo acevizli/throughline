@@ -3,7 +3,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Book, Pages } from "../src/pdf/book";
 import { chapters, segment } from "../src/ingest/segments";
-import { MODEL, writeBrief, type Brief } from "../src/ingest/brief";
+import { KEYS, MODEL, writeBrief, type Brief, type Key, type Question } from "../src/ingest/brief";
 import { nameUnits } from "../src/ingest/name";
 import { DEFAULTS, toUnits, type Unit } from "../src/ingest/units";
 import { database, SHELF, transaction } from "../src/store/db";
@@ -17,6 +17,10 @@ export interface ShelfBook {
   minutes: number;
   doneUnits: number;
   doneMinutes: number;
+  /** Units answered with every question right. */
+  clean: number;
+  /** Units answered with something missed. Never subtracted from progress. */
+  shaky: number;
   /** Where reading stopped — the unit to resume at. */
   lastUnit: string | null;
   openedAt: string;
@@ -24,6 +28,8 @@ export interface ShelfBook {
 
 export interface CourseUnit extends Unit {
   done: boolean;
+  /** The last attempt at this unit's questions, if it has been taken. */
+  recall: { score: number; outOf: number } | null;
 }
 
 export interface Course {
@@ -43,8 +49,12 @@ export function shelf(): ShelfBook[] {
               COUNT(u.id)                                     AS units,
               COALESCE(SUM(u.minutes), 0)                     AS minutes,
               COUNT(u.done_at)                                AS done_units,
-              COALESCE(SUM(CASE WHEN u.done_at IS NOT NULL THEN u.minutes END), 0) AS done_minutes
-         FROM book b LEFT JOIN unit u ON u.book_id = b.id
+              COALESCE(SUM(CASE WHEN u.done_at IS NOT NULL THEN u.minutes END), 0) AS done_minutes,
+              COUNT(CASE WHEN a.score = a.out_of THEN 1 END)  AS clean,
+              COUNT(CASE WHEN a.score < a.out_of THEN 1 END)  AS shaky
+         FROM book b
+         LEFT JOIN unit u    ON u.book_id = b.id
+         LEFT JOIN attempt a ON a.book_id = u.book_id AND a.unit_id = u.id
         GROUP BY b.id
         ORDER BY b.opened_at DESC`,
     )
@@ -58,6 +68,8 @@ export function shelf(): ShelfBook[] {
     minutes: Number(r.minutes),
     doneUnits: Number(r.done_units),
     doneMinutes: Number(r.done_minutes),
+    clean: Number(r.clean),
+    shaky: Number(r.shaky),
     lastUnit: r.last_unit,
     openedAt: r.opened_at,
   }));
@@ -171,7 +183,13 @@ export function course(id: string): Course | null {
   if (!book) return null;
 
   const rows = db
-    .prepare("SELECT * FROM unit WHERE book_id = ? ORDER BY ord")
+    .prepare(
+      `SELECT u.*, a.score, a.out_of
+         FROM unit u
+         LEFT JOIN attempt a ON a.book_id = u.book_id AND a.unit_id = u.id
+        WHERE u.book_id = ?
+        ORDER BY u.ord`,
+    )
     .all(id) as any[];
 
   return {
@@ -192,6 +210,7 @@ export function course(id: string): Course | null {
       minutes: r.minutes,
       covers: JSON.parse(r.covers) as string[],
       done: r.done_at !== null,
+      recall: r.out_of === null ? null : { score: Number(r.score), outOf: Number(r.out_of) },
     })),
   };
 }
@@ -243,7 +262,13 @@ export async function brief(bookId: string, unitId: string): Promise<Brief | { e
   const row = db
     .prepare("SELECT primer, objectives FROM brief WHERE book_id = ? AND unit_id = ?")
     .get(bookId, unitId) as { primer: string; objectives: string } | undefined;
-  if (row) return { primer: row.primer, objectives: JSON.parse(row.objectives) as string[] };
+  if (row) {
+    return {
+      primer: row.primer,
+      objectives: JSON.parse(row.objectives) as string[],
+      questions: questionsFor(bookId, unitId),
+    };
+  }
 
   if (!process.env.ANTHROPIC_API_KEY) {
     return { error: "No ANTHROPIC_API_KEY is set, so there is no briefing for this unit." };
@@ -263,9 +288,21 @@ export async function brief(bookId: string, unitId: string): Promise<Brief | { e
   }
 }
 
-/** Throw away a unit's briefing so the next open writes a fresh one. */
+/**
+ * Throw away a unit's briefing so the next open writes a fresh one.
+ *
+ * The questions go with it: they were written in the same call, against the
+ * same objectives, so keeping them beside a rewritten set would leave a unit
+ * being asked about capabilities it no longer claims to teach. The attempt goes
+ * too — a score against questions that no longer exist means nothing.
+ */
 export function unbrief(bookId: string, unitId: string): void {
-  database().prepare("DELETE FROM brief WHERE book_id = ? AND unit_id = ?").run(bookId, unitId);
+  const db = database();
+  transaction(() => {
+    for (const table of ["brief", "question", "attempt"]) {
+      db.prepare(`DELETE FROM ${table} WHERE book_id = ? AND unit_id = ?`).run(bookId, unitId);
+    }
+  });
 }
 
 async function generate(bookId: string, unitId: string): Promise<Brief> {
@@ -303,19 +340,197 @@ async function generate(bookId: string, unitId: string): Promise<Brief> {
     preceding,
   });
 
-  db.prepare(
-    `INSERT OR REPLACE INTO brief (book_id, unit_id, primer, objectives, model, made_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    bookId,
-    unitId,
-    written.primer,
-    JSON.stringify(written.objectives),
-    MODEL,
-    new Date().toISOString(),
-  );
+  transaction(() => {
+    db.prepare(
+      `INSERT OR REPLACE INTO brief (book_id, unit_id, primer, objectives, model, made_at, questions)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      bookId,
+      unitId,
+      written.primer,
+      JSON.stringify(written.objectives),
+      MODEL,
+      new Date().toISOString(),
+      written.questions.length,
+    );
+
+    const insert = db.prepare(
+      `INSERT OR REPLACE INTO question (book_id, unit_id, ord, stem, options, correct)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    written.questions.forEach((q, i) =>
+      insert.run(bookId, unitId, i, q.stem, JSON.stringify(q.options), JSON.stringify(q.correct)),
+    );
+  });
 
   return written;
+}
+
+/* ── questions ─────────────────────────────────────────────────── */
+
+/** A question as the reader sees it: no correct keys, and no page numbers. */
+export interface AskedQuestion {
+  ord: number;
+  stem: string;
+  options: { key: Key; text: string }[];
+}
+
+/** A marked question, with everything that was hidden while answering. */
+export interface MarkedQuestion {
+  ord: number;
+  stem: string;
+  options: { key: Key; text: string; page: number; correct: boolean; picked: boolean }[];
+  /** 1, 0.5 or 0 — see `grade`. */
+  got: number;
+}
+
+export interface Marked {
+  score: number;
+  outOf: number;
+  takenAt: string;
+  questions: MarkedQuestion[];
+}
+
+export type Quiz =
+  | { state: "asking"; questions: AskedQuestion[] }
+  | { state: "marked"; result: Marked }
+  | { state: "none"; reason: string };
+
+/**
+ * A unit's questions — unanswered, or the marked result if they've been taken.
+ *
+ * Nothing that could give an answer away crosses to the client while the
+ * questions are open: no `correct`, and no page numbers either, since four
+ * anchors clustered on one page is a tell. The reader gets stems and option
+ * text, and everything else arrives with the marking.
+ */
+export async function quiz(bookId: string, unitId: string): Promise<Quiz> {
+  const db = database();
+
+  const taken = db
+    .prepare("SELECT picks, score, out_of, taken_at FROM attempt WHERE book_id = ? AND unit_id = ?")
+    .get(bookId, unitId) as
+    | { picks: string; score: number; out_of: number; taken_at: string }
+    | undefined;
+
+  // A briefing written before questions existed carries -1 and has to be paid
+  // for again; one whose questions were all dropped carries 0 and must not be,
+  // or every open would buy another doomed call.
+  const legacy = db
+    .prepare("SELECT questions FROM brief WHERE book_id = ? AND unit_id = ?")
+    .get(bookId, unitId) as { questions: number } | undefined;
+  if (legacy?.questions === -1) unbrief(bookId, unitId);
+
+  // Written in the same call as the briefing, so asking for one buys both.
+  const written = await brief(bookId, unitId);
+  if ("error" in written) return { state: "none", reason: written.error };
+
+  const stored = questionsFor(bookId, unitId);
+  if (stored.length === 0) {
+    return {
+      state: "none",
+      reason:
+        "No questions survived for this unit — every one the model wrote cited a page outside " +
+        "its range. Rewriting the briefing will try again.",
+    };
+  }
+
+  if (taken) {
+    return {
+      state: "marked",
+      result: assemble(stored, JSON.parse(taken.picks) as Key[][], taken.taken_at),
+    };
+  }
+
+  return {
+    state: "asking",
+    questions: stored.map((q, ord) => ({
+      ord,
+      stem: q.stem,
+      options: KEYS.map((key) => ({ key, text: q.options[key].text })),
+    })),
+  };
+}
+
+/** Mark an attempt, store it in place of any previous one, and hand back the result. */
+export function mark(bookId: string, unitId: string, picks: Key[][]): Marked | { error: string } {
+  const stored = questionsFor(bookId, unitId);
+  if (stored.length === 0) return { error: "this unit has no questions" };
+
+  const cleaned = stored.map((_, i) => [...new Set(picks[i] ?? [])].filter((k) => KEYS.includes(k)));
+  const result = assemble(stored, cleaned, new Date().toISOString());
+
+  database()
+    .prepare(
+      `INSERT OR REPLACE INTO attempt (book_id, unit_id, picks, score, out_of, taken_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      bookId,
+      unitId,
+      JSON.stringify(cleaned),
+      result.score,
+      result.outOf,
+      result.takenAt,
+    );
+
+  return result;
+}
+
+/** Clear the stored attempt so the same questions can be taken again. */
+export function retake(bookId: string, unitId: string): void {
+  database().prepare("DELETE FROM attempt WHERE book_id = ? AND unit_id = ?").run(bookId, unitId);
+}
+
+function questionsFor(bookId: string, unitId: string): Question[] {
+  return (
+    database()
+      .prepare("SELECT stem, options, correct FROM question WHERE book_id = ? AND unit_id = ? ORDER BY ord")
+      .all(bookId, unitId) as { stem: string; options: string; correct: string }[]
+  ).map((r) => ({
+    stem: r.stem,
+    options: JSON.parse(r.options) as Question["options"],
+    correct: JSON.parse(r.correct) as Key[],
+  }));
+}
+
+function assemble(questions: Question[], picks: Key[][], takenAt: string): Marked {
+  const marked = questions.map((q, ord) => {
+    const picked = picks[ord] ?? [];
+    return {
+      ord,
+      stem: q.stem,
+      options: KEYS.map((key) => ({
+        key,
+        text: q.options[key].text,
+        page: q.options[key].page,
+        correct: q.correct.includes(key),
+        picked: picked.includes(key),
+      })),
+      got: grade(q.correct, picked),
+    };
+  });
+
+  return {
+    score: marked.reduce((n, q) => n + q.got, 0),
+    outOf: marked.length,
+    takenAt,
+    questions: marked,
+  };
+}
+
+/**
+ * Exact set, half credit, or nothing.
+ *
+ * A subset of the correct options with nothing wrong alongside it scores a half
+ * — right as far as it went. One wrong pick is worth zero however much else was
+ * right: the second option exists precisely to catch a half-held idea, and
+ * paying out for it would defeat not telling the reader how many to look for.
+ */
+function grade(correct: Key[], picked: Key[]): number {
+  if (picked.length === 0) return 0;
+  if (picked.some((k) => !correct.includes(k))) return 0;
+  return picked.length === correct.length ? 1 : 0.5;
 }
 
 /**

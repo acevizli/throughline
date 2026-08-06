@@ -1,18 +1,45 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+/** The four option slots. Fixed, because arrays take no length constraint. */
+export const KEYS = ["a", "b", "c", "d"] as const;
+export type Key = (typeof KEYS)[number];
+
 /**
- * What a unit adds to the page range you already have: a bridge into it, and
- * what you should be able to do once you're out.
+ * One option, and the page that settles it.
  *
- * Deliberately small. There are no recall questions here (grading owns those),
- * no quotes, no per-objective page anchors and no prerequisites — every one of
- * those was considered and cut, because the unit's job is to point at the book,
- * not to stand in front of it.
+ * The page is the whole point. Marking an option wrong is the system asserting
+ * the book says otherwise, and an assertion with no page behind it is exactly
+ * the drift this project exists not to do. Right options cite where the book
+ * says so; wrong ones cite where it says otherwise.
+ */
+export interface Option {
+  text: string;
+  /** 1-based PDF page index, always inside the unit's own range. */
+  page: number;
+}
+
+/** One question, checking exactly one objective. */
+export interface Question {
+  stem: string;
+  options: Record<Key, Option>;
+  /** One or two keys. Never revealed to the reader before they answer. */
+  correct: Key[];
+}
+
+/**
+ * What a unit adds to the page range you already have: a bridge into it, what
+ * you should be able to do once you're out, and the questions that check it.
+ *
+ * All three come from one call. Splitting question generation into its own pass
+ * would have meant reading the same ~8k tokens of pages a second time to write
+ * about objectives that call already had in hand.
  */
 export interface Brief {
   /** At most 50 words. Empty when the unit assumes nothing new. */
   primer: string;
   objectives: string[];
+  /** One per objective, in the same order. Shorter when validation drops one. */
+  questions: Question[];
 }
 
 /** One entry of the roadmap above this unit — what the reader has already met. */
@@ -65,9 +92,21 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
     ? preceding.map((p) => `${p.id} ${p.title} (${p.chapter})`).join("\n")
     : "(nothing — this is the first unit of the book)";
 
+  // Four named slots rather than an array of four: constrained decoding rejects
+  // every array length constraint there is (minItems above 1, maxItems,
+  // prefixItems), but it does enforce required object keys. So the option set is
+  // structurally guaranteed to be exactly four, and only "one or two correct"
+  // is left to enforce in code.
+  const option = {
+    type: "object",
+    properties: { text: { type: "string" }, page: { type: "integer" } },
+    required: ["text", "page"],
+    additionalProperties: false,
+  };
+
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 8000,
+    max_tokens: 16000,
     thinking: { type: "adaptive" },
     output_config: {
       effort: "medium",
@@ -75,13 +114,28 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
         type: "json_schema",
         schema: {
           type: "object",
-          // No minItems/maxItems: constrained decoding rejects any minItems
-          // above 1, so the count is asked for in the prompt and enforced below.
           properties: {
             primer: { type: "string" },
             objectives: { type: "array", items: { type: "string" } },
+            questions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  stem: { type: "string" },
+                  a: option,
+                  b: option,
+                  c: option,
+                  d: option,
+                  // enum *is* enforced, so a key outside a–d cannot come back.
+                  correct: { type: "array", items: { type: "string", enum: [...KEYS] } },
+                },
+                required: ["stem", "a", "b", "c", "d", "correct"],
+                additionalProperties: false,
+              },
+            },
           },
-          required: ["primer", "objectives"],
+          required: ["primer", "objectives", "questions"],
           additionalProperties: false,
         },
       },
@@ -118,7 +172,27 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
           `teach more than ${count} load-bearing ideas, pick the ${count} that carry the most ` +
           "weight and leave the rest to the pages; never mention anything the pages do not " +
           "teach. No trailing punctuation.\n\n" +
-          "The pages follow.\n\n" +
+          `**questions** — exactly ${count}, one per objective, in the same order as the ` +
+          "objectives. Each checks whether the reader can actually do the thing that " +
+          "objective names, from memory, with the book closed.\n\n" +
+          "Each question has a stem and four options `a`–`d`. **One or two of them are " +
+          "correct — never zero, never three, and vary which.** The reader is not told how " +
+          "many, so a second correct option must be genuinely correct and a wrong one " +
+          "genuinely wrong; do not include a near-miss you would argue about.\n\n" +
+          "Wrong options are the misreadings these pages exist to prevent — a plausible " +
+          "confusion the author explicitly settles, the right answer to a neighbouring " +
+          "question, a true statement that does not answer this stem. Never obviously " +
+          "absurd filler.\n\n" +
+          "**Every option carries the page that settles it.** The pages below are marked " +
+          "`[[page N]]` before each page's text. For a correct option, cite the page where " +
+          "the author says so. For a wrong option, cite the page where the author says " +
+          "otherwise — the passage a reader would go to to see why it is wrong. Use only " +
+          `page numbers that appear as markers below (${unit.from}–${unit.to}); if you cannot ` +
+          "point at a page for an option, rewrite the option until you can.\n\n" +
+          "Ask about what the pages argue, not what they mention: nothing about which figure " +
+          "shows what, what a section is called, or which company an example came from. Never " +
+          "write an option that only makes sense to someone with the book open.\n\n" +
+          "The pages follow, each marked with its page number.\n\n" +
           "-----\n" +
           text,
       },
@@ -128,16 +202,61 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
   const block = response.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") throw new Error("no text block in briefing response");
 
-  const parsed = JSON.parse(block.text) as Brief;
-  return {
-    primer: cap(parsed.primer ?? ""),
+  const parsed = JSON.parse(block.text) as {
+    primer?: string;
+    objectives?: string[];
+    questions?: (Record<Key, Option> & { stem?: string; correct?: Key[] })[];
+  };
+
+  const objectives = (parsed.objectives ?? [])
+    .map((o) => o.trim())
+    .filter(Boolean)
     // Sliced, not merely requested: the count is the ceiling on how much you
     // will be asked to recall, so it is not the model's to overrun.
-    objectives: (parsed.objectives ?? [])
-      .map((o) => o.trim())
-      .filter(Boolean)
-      .slice(0, count),
+    .slice(0, count);
+
+  return {
+    primer: cap(parsed.primer ?? ""),
+    objectives,
+    questions: (parsed.questions ?? [])
+      .slice(0, objectives.length)
+      .map((q) => usable(q, unit.from, unit.to))
+      .filter((q): q is Question => q !== null),
   };
+}
+
+/**
+ * A question, or null if it failed validation.
+ *
+ * This is the mechanical drift check the briefing itself never got. A page
+ * outside the unit's own range is a page the model did not read — it invented
+ * it — and an option whose anchor is invented is precisely the assertion this
+ * project is not allowed to make. So the question is dropped rather than shown
+ * with a citation that doesn't hold. Losing a question costs one line of a
+ * results panel; showing a fabricated page costs the only rule that matters.
+ */
+function usable(
+  q: Record<Key, Option> & { stem?: string; correct?: Key[] },
+  from: number,
+  to: number,
+): Question | null {
+  const stem = q.stem?.trim();
+  if (!stem) return null;
+
+  const options = {} as Record<Key, Option>;
+  for (const key of KEYS) {
+    const text = q[key]?.text?.trim();
+    const page = q[key]?.page;
+    if (!text || !Number.isInteger(page) || page < from || page > to) return null;
+    options[key] = { text, page };
+  }
+
+  // The enum guarantees the keys are a–d; it cannot guarantee how many, and
+  // "at most two" is the difference between a question and a giveaway.
+  const correct = [...new Set(q.correct ?? [])].filter((k) => KEYS.includes(k));
+  if (correct.length < 1 || correct.length > 2) return null;
+
+  return { stem, options, correct };
 }
 
 /**

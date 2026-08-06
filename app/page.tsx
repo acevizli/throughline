@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Course, CourseUnit, ShelfBook } from "../lib/library";
+import type { AskedQuestion, Course, CourseUnit, Marked, Quiz, ShelfBook } from "../lib/library";
+import type { Key } from "../src/ingest/brief";
 
 /** Zoom is a multiplier over fit-width, so 1 is "the page fills its column". */
 const ZOOM_MIN = 0.5;
@@ -53,6 +54,11 @@ export default function Home() {
     }).catch(() => {});
   }, [course, current]);
 
+  // Which unit's questions are on screen. Ticking a unit off opens them: the
+  // questions are the other half of finishing a unit, and burying them behind a
+  // button nobody presses would have made grading decorative.
+  const [quizzing, setQuizzing] = useState<string | null>(null);
+
   const setDone = useCallback(
     (index: number, done: boolean) => {
       setCourse((c) => {
@@ -65,9 +71,19 @@ export default function Home() {
         }).catch(() => {});
         return { ...c, units };
       });
+      if (done) setQuizzing(course?.units[index].id ?? null);
     },
-    [],
+    [course],
   );
+
+  /** A page anchor was followed out of the results panel. */
+  const jump = useCallback((page: number) => {
+    setQuizzing(null);
+    // After the overlay unmounts, so the target isn't behind it.
+    requestAnimationFrame(() =>
+      document.getElementById(`page-${page}`)?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, []);
 
   // Zoom and unit keys live on the window, because in focus mode there is no
   // chrome to click. Cmd/Ctrl +/-/0 are swallowed so the *page* zooms instead
@@ -94,6 +110,13 @@ export default function Home() {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (!course) return;
 
+      // With questions on screen the shortcuts would move the book out from
+      // under them; Escape closes, everything else waits.
+      if (quizzing) {
+        if (event.key === "Escape") setQuizzing(null);
+        return;
+      }
+
       switch (event.key) {
         case "f":
           return setFocus((f) => !f);
@@ -110,7 +133,7 @@ export default function Home() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [course, current, setDone]);
+  }, [course, current, setDone, quizzing]);
 
   const addBook = useCallback(
     async (file: File) => {
@@ -180,7 +203,24 @@ export default function Home() {
           setCurrent((i) => Math.min(course.units.length - 1, Math.max(0, i + delta)))
         }
         onDone={(done) => setDone(current, done)}
+        onQuiz={() => setQuizzing(course.units[current].id)}
       />
+      {quizzing && (
+        <Questions
+          key={quizzing}
+          book={course.id}
+          unit={course.units.find((u) => u.id === quizzing)!}
+          onClose={() => setQuizzing(null)}
+          onJump={jump}
+          onMarked={(recall) =>
+            setCourse((c) =>
+              c
+                ? { ...c, units: c.units.map((u) => (u.id === quizzing ? { ...u, recall } : u)) }
+                : c,
+            )
+          }
+        />
+      )}
     </div>
   );
 }
@@ -260,6 +300,14 @@ function Shelf({
                   <strong>{percent}%</strong> · {book.doneUnits}/{book.units} units ·{" "}
                   {left ? `${left}h left` : "done"}
                 </div>
+                {/* The second number, deliberately beside the percentage and never
+                    folded into it: one says read, the other says retained. */}
+                {book.clean + book.shaky > 0 && (
+                  <div className="cardstats">
+                    <span className="clean">{book.clean} recalled clean</span>
+                    {book.shaky > 0 && <span className="shaky"> · {book.shaky} shaky</span>}
+                  </div>
+                )}
                 <div className="cardgo">
                   {book.doneUnits === book.units
                     ? "read again"
@@ -348,6 +396,12 @@ function Sidebar({
                   {unit.code > unit.prose * 0.4 && (
                     <span className="codeflag"> · +{Math.round(unit.code / 1000)}k code</span>
                   )}
+                  {unit.recall && (
+                    <span className={unit.recall.score === unit.recall.outOf ? "clean" : "shaky"}>
+                      {" · "}
+                      {points(unit.recall.score)}/{unit.recall.outOf} recalled
+                    </span>
+                  )}
                 </span>
               </button>
             </div>
@@ -386,8 +440,8 @@ function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
   if (!brief) {
     return (
       <div className="brief working">
-        Reading pp. {unit.from}–{unit.to} and writing the briefing. Twenty seconds or so —
-        paid once, then it's on disk.
+        Reading pp. {unit.from}–{unit.to}, writing the briefing and setting this unit's
+        questions. About a minute — paid once, then it's on disk.
       </div>
     );
   }
@@ -418,6 +472,226 @@ function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
   );
 }
 
+/* ── the questions ─────────────────────────────────────────────── */
+
+/** Fisher–Yates. The stems are stored in one order and shown in another. */
+function shuffle<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/** How a score reads. Halves exist, so 2.5 has to print as 2.5 and 3 as 3. */
+const points = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+/**
+ * A unit's questions, over the pages.
+ *
+ * Deliberately covering the book rather than sitting beside it: the whole point
+ * is answering with the book closed, and a checkbox list next to the page you
+ * were just reading is an open-book test with extra steps.
+ */
+function Questions({
+  book,
+  unit,
+  onClose,
+  onJump,
+  onMarked,
+}: {
+  book: string;
+  unit: CourseUnit;
+  onClose: () => void;
+  onJump: (page: number) => void;
+  onMarked: (recall: { score: number; outOf: number }) => void;
+}) {
+  const [quiz, setQuiz] = useState<Quiz | null>(null);
+  const [picks, setPicks] = useState<Key[][]>([]);
+  /** Display order per question — kept so the results don't reshuffle underneath. */
+  const [order, setOrder] = useState<Key[][]>([]);
+  const [sending, setSending] = useState(false);
+  const [round, setRound] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    setQuiz(null);
+    fetch(`/api/quiz?book=${book}&unit=${unit.id}`)
+      .then((r) => r.json())
+      .then((data: Quiz) => {
+        if (!live) return;
+        setQuiz(data);
+        if (data.state === "asking") {
+          setPicks(data.questions.map(() => []));
+          setOrder(data.questions.map((q) => shuffle(q.options.map((o) => o.key))));
+        } else if (data.state === "marked") {
+          setOrder(data.result.questions.map((q) => q.options.map((o) => o.key)));
+        }
+      })
+      .catch((cause) => live && setQuiz({ state: "none", reason: (cause as Error).message }));
+    return () => {
+      live = false;
+    };
+  }, [book, unit.id, round]);
+
+  const toggle = (index: number, key: Key) =>
+    setPicks((all) =>
+      all.map((chosen, i) =>
+        i !== index ? chosen : chosen.includes(key) ? chosen.filter((k) => k !== key) : [...chosen, key],
+      ),
+    );
+
+  const submit = async () => {
+    setSending(true);
+    try {
+      const result: Marked = await fetch("/api/quiz", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ book, unit: unit.id, picks }),
+      }).then((r) => r.json());
+      setQuiz({ state: "marked", result });
+      onMarked({ score: result.score, outOf: result.outOf });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const again = async () => {
+    await fetch(`/api/quiz?book=${book}&unit=${unit.id}`, { method: "DELETE" });
+    setRound((n) => n + 1);
+  };
+
+  return (
+    <div className="quizveil" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <section className="quizcard">
+        <header className="quizhead">
+          <div>
+            <div className="quizunit">
+              {unit.id} — {unit.title}
+            </div>
+            <div className="quizsub">
+              {quiz?.state === "marked"
+                ? `${points(quiz.result.score)} of ${quiz.result.outOf}`
+                : `pp. ${unit.from}–${unit.to} · book closed`}
+            </div>
+          </div>
+          <button className="ghost" onClick={onClose}>
+            close
+          </button>
+        </header>
+
+        {!quiz && <p className="quiznote">Fetching this unit's questions…</p>}
+
+        {quiz?.state === "none" && <p className="quiznote">{quiz.reason}</p>}
+
+        {quiz?.state === "asking" && (
+          <>
+            {quiz.questions.map((question, i) => (
+              <Asked
+                key={question.ord}
+                question={question}
+                index={i}
+                order={order[i] ?? []}
+                picked={picks[i] ?? []}
+                onToggle={(key) => toggle(i, key)}
+              />
+            ))}
+            <footer className="quizfoot">
+              <span className="quiznote">
+                {picks.filter((p) => p.length).length} of {quiz.questions.length} answered · one or
+                two options each
+              </span>
+              <button className="primary" onClick={submit} disabled={sending}>
+                {sending ? "marking…" : "check"}
+              </button>
+            </footer>
+          </>
+        )}
+
+        {quiz?.state === "marked" && (
+          <>
+            {quiz.result.questions.map((question, i) => (
+              <div key={question.ord} className="qblock" data-got={question.got}>
+                <div className="qstem">
+                  <span className="qmark">
+                    {question.got === 1 ? "✓" : question.got === 0 ? "✗" : "◑"}
+                  </span>
+                  {question.stem}
+                </div>
+                {(order[i] ?? question.options.map((o) => o.key)).map((key) => {
+                  const option = question.options.find((o) => o.key === key)!;
+                  return (
+                    <div
+                      key={key}
+                      className="qopt result"
+                      data-correct={option.correct}
+                      data-picked={option.picked}
+                    >
+                      <span className="qbox">{option.picked ? "■" : "□"}</span>
+                      <span className="qtext">{option.text}</span>
+                      <button className="anchor" onClick={() => onJump(option.page)}>
+                        p.{option.page}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            <footer className="quizfoot">
+              <span className="quiznote">
+                Every line above is auditable — follow a page to see what settles it.
+              </span>
+              <button className="ghost" onClick={again}>
+                take again
+              </button>
+            </footer>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Asked({
+  question,
+  index,
+  order,
+  picked,
+  onToggle,
+}: {
+  question: AskedQuestion;
+  index: number;
+  order: Key[];
+  picked: Key[];
+  onToggle: (key: Key) => void;
+}) {
+  return (
+    <div className="qblock">
+      <div className="qstem">
+        <span className="qnum">{index + 1}</span>
+        {question.stem}
+      </div>
+      {order.map((key) => {
+        const option = question.options.find((o) => o.key === key)!;
+        return (
+          <button
+            key={key}
+            className="qopt"
+            role="checkbox"
+            aria-checked={picked.includes(key)}
+            data-picked={picked.includes(key)}
+            onClick={() => onToggle(key)}
+          >
+            <span className="qbox">{picked.includes(key) ? "■" : "□"}</span>
+            <span className="qtext">{option.text}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── the book ──────────────────────────────────────────────────── */
 
 function Reader({
@@ -430,6 +704,7 @@ function Reader({
   position,
   onStep,
   onDone,
+  onQuiz,
 }: {
   book: string;
   unit: CourseUnit;
@@ -440,6 +715,7 @@ function Reader({
   position: { index: number; total: number };
   onStep: (delta: number) => void;
   onDone: (done: boolean) => void;
+  onQuiz: () => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [column, setColumn] = useState(760);
@@ -514,6 +790,13 @@ function Reader({
           >
             {unit.done ? "✓ complete" : "mark complete"}
           </button>
+          {unit.done && (
+            <button className="ghost" onClick={onQuiz} title="answer this unit's questions">
+              {unit.recall
+                ? `${points(unit.recall.score)}/${unit.recall.outOf} recalled`
+                : "questions"}
+            </button>
+          )}
           {zoomControls}
           <button className="ghost" onClick={() => onFocus(true)} title="full page  f">
             full page
@@ -525,7 +808,8 @@ function Reader({
 
       <div className={focus ? "pages bare" : "pages"}>
         {pages.map((page) => (
-          <figure key={page}>
+          // The id is what a page anchor in the results panel scrolls to.
+          <figure key={page} id={`page-${page}`}>
             {/* Server-rendered PNG — see Pages.render for why not client-side pdf.js. */}
             <img
               src={`/api/page?book=${book}&page=${page}&scale=${scale}`}

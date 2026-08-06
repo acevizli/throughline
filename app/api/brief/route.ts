@@ -13,5 +13,11 @@ export async function GET(request: Request) {
 
   if (params.get("fresh") === "1") unbrief(book, unit);
 
-  return Response.json(await brief(book, unit));
+  const written = await brief(book, unit);
+  if ("error" in written) return Response.json(written);
+
+  // The same call writes the questions, and they carry their correct keys. They
+  // do not go out with the briefing: the sidebar payload is readable in
+  // devtools, and a quiz whose answers ship with the primer is not a quiz.
+  return Response.json({ primer: written.primer, objectives: written.objectives });
 }

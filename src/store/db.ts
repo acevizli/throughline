@@ -64,6 +64,38 @@ const MIGRATIONS = [
     FOREIGN KEY (book_id, unit_id) REFERENCES unit(book_id, id) ON DELETE CASCADE
   );
   `,
+  `
+  CREATE TABLE question (
+    book_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    ord     INTEGER NOT NULL,
+    stem    TEXT NOT NULL,
+    options TEXT NOT NULL,
+    correct TEXT NOT NULL,
+    PRIMARY KEY (book_id, unit_id, ord),
+    FOREIGN KEY (book_id, unit_id) REFERENCES unit(book_id, id) ON DELETE CASCADE
+  );
+
+  -- One row per unit, not one per sitting: the latest attempt replaces the
+  -- previous one. Keeping every attempt is the first half of a review
+  -- scheduler, and spaced repetition is out of scope.
+  CREATE TABLE attempt (
+    book_id  TEXT NOT NULL,
+    unit_id  TEXT NOT NULL,
+    picks    TEXT NOT NULL,
+    score    REAL NOT NULL,
+    out_of   INTEGER NOT NULL,
+    taken_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, unit_id),
+    FOREIGN KEY (book_id, unit_id) REFERENCES unit(book_id, id) ON DELETE CASCADE
+  );
+  `,
+  `
+  -- How many questions the briefing call produced, so a briefing written before
+  -- questions existed (-1) can be told apart from one whose questions were all
+  -- dropped by validation (0). The first is regenerated; the second is not.
+  ALTER TABLE brief ADD COLUMN questions INTEGER NOT NULL DEFAULT -1;
+  `,
 ];
 
 let handle: DatabaseSync | null = null;

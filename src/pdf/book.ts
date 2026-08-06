@@ -116,11 +116,18 @@ export class Pages {
   }
 
   /**
-   * The text of a page range, as close to reading order as pdf.js gives it.
+   * The text of a page range, as close to reading order as pdf.js gives it,
+   * with every page preceded by a `[[page N]]` marker.
    *
    * This is what a briefing is written from: the author's own words for exactly
    * the pages the unit spans. Nothing is summarised or selected on the way out
    * — a unit's whole range is ~8k tokens, so there is no reason to sample it.
+   *
+   * The markers are what make a page citation possible at all. Without them the
+   * model sees one undifferentiated run of prose and any page number it produces
+   * is invented — which is the exact failure the citations exist to prevent. The
+   * doubled brackets are deliberate: nothing in a book's own text looks like it,
+   * so a marker can never be mistaken for the author's words.
    */
   async text(from: number, to: number): Promise<string> {
     const out: string[] = [];
@@ -141,7 +148,7 @@ export class Pages {
       }
       if (line.trim()) lines.push(line.trim());
       page.cleanup();
-      out.push(lines.filter(Boolean).join("\n"));
+      out.push(`[[page ${p}]]\n${lines.filter(Boolean).join("\n")}`);
     }
     return out.join("\n\n");
   }
