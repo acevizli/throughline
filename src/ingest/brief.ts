@@ -39,7 +39,7 @@ export interface BriefRequest {
   preceding: Prior[];
 }
 
-export const MODEL = "claude-opus-5";
+export const MODEL = "claude-sonnet-4-6";
 
 const PRIMER_WORDS = 50;
 

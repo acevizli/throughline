@@ -3,10 +3,10 @@
 Turns a technical book into a course you can actually start.
 
 Point it at a PDF and it produces a roadmap of concept-sized units — each with learning
-objectives, a primer on what to watch for, and the exact page range to read — displayed
-beside the rendered page. Each unit also tells you which earlier units it leans on, ranked
-by how often the book cites them. Answer the recall questions afterwards and they're
-graded against the book's own pages.
+objectives, a primer naming what the author assumes you already know, and the exact page
+range to read — displayed beside the rendered page. Each unit also tells you which earlier
+units it leans on, ranked by how often the book cites them. Recall what you read afterwards
+and it's graded against the book's own pages.
 
 Pilot book: *Designing Data-Intensive Applications* (613 pages, 12 chapters).
 
@@ -41,8 +41,10 @@ graph didn't.
 
 ## Shape
 
-- **Reading guide, not a substitute.** The AI writes objectives, primers and questions.
-  It never rewrites the author.
+- **Reading guide, not a substitute.** The AI writes objectives and a primer, and grades
+  what you remember. It never rewrites the author. The primer is capped at fifty words in
+  code, not merely in the prompt: a field that can't exceed fifty words can't quietly
+  become the chapter you were supposed to read.
 - **Concept-boxed units.** One coherent idea per unit, however long that takes — not
   fixed 45-minute blocks, and not a 1:1 re-index of the book's sections.
 - **Two-phase generation.** A cheap structural pass at ingest makes the whole roadmap
@@ -64,7 +66,15 @@ seconds; unit titles need `ANTHROPIC_API_KEY` in `.env` and add about ten second
 once per book, ever**. Without a key you still get units, just structural titles.
 
 After that the book lives on the shelf with its progress, and opens instantly. Tick a unit
-off as you finish it; the card shows how far in you are and where to resume. The shelf is
+off as you finish it; the card shows how far in you are and where to resume.
+
+Opening a unit for the first time writes its **briefing** — a primer and two to five
+objectives, sized from how much prose the unit holds — from the author's text for exactly
+those pages. It takes about ten seconds and is then on disk: every open after that is a
+database read, and re-reading the book costs nothing. All of DDIA is 39 such calls. Without
+a key the unit still opens; it just says the briefing is unavailable.
+
+The shelf is
 a SQLite database plus a copy of each PDF under `~/.throughline` (override with
 `THROUGHLINE_HOME`) — books are copied in rather than referenced, so moving the original
 out of Downloads doesn't cost you the ingest.
@@ -78,8 +88,9 @@ npm run ingest -- ~/Downloads/book.pdf 35 --name
 ## Status
 
 Early, but usable. A book you add stays added: shelf, per-unit completion, resume where
-you left off, and a full-page reading mode that zooms the page instead of the browser tab.
-Not built yet — objectives, primers, recall questions, grading, and the "leans on" panel.
+you left off, a full-page reading mode that zooms the page instead of the browser tab, and
+a briefing above each unit written from its own pages. Not built yet — grading, and the
+"leans on" panel.
 
 The design is charted as a wayfinder map — **[issue #1](https://github.com/acevizli/throughline/issues/1)**
 holds the locked decisions, the fog that isn't sharp enough to ticket yet, and what's
