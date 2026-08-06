@@ -1,16 +1,22 @@
-import { ingest } from "../../../lib/library";
+import { pages } from "../../../lib/library";
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const path = params.get("path");
+  const book = params.get("book");
   const page = Number(params.get("page"));
-  if (!path || !page) return new Response("path and page required", { status: 400 });
+  if (!book || !page) return new Response("book and page required", { status: 400 });
 
-  const { book } = await ingest(path);
-  if (page < 1 || page > book.pageCount) return new Response("out of range", { status: 404 });
+  // The reader asks for a sharper render as it zooms in, in whole steps so the
+  // browser cache still hits. Clamped because scale is a canvas allocation.
+  const scale = Math.min(4, Math.max(1, Math.round(Number(params.get("scale")) || 2)));
 
-  const png = await book.renderPage(page);
-  return new Response(new Uint8Array(png), {
+  const opening = pages(book);
+  if (!opening) return new Response("no such book", { status: 404 });
+
+  const pdf = await opening;
+  if (page < 1 || page > pdf.pageCount) return new Response("out of range", { status: 404 });
+
+  return new Response(new Uint8Array(await pdf.render(page, scale)), {
     headers: {
       "content-type": "image/png",
       // Pages never change for a given file; let the browser keep them.

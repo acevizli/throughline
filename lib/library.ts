@@ -1,104 +1,245 @@
-import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Book } from "../src/pdf/book";
+import { Book, Pages } from "../src/pdf/book";
 import { chapters, segment } from "../src/ingest/segments";
 import { nameUnits } from "../src/ingest/name";
 import { DEFAULTS, toUnits, type Unit } from "../src/ingest/units";
+import { database, SHELF, transaction } from "../src/store/db";
+
+/** One book on the shelf, with enough progress to render its card. */
+export interface ShelfBook {
+  id: string;
+  title: string;
+  pageCount: number;
+  units: number;
+  minutes: number;
+  doneUnits: number;
+  doneMinutes: number;
+  /** Where reading stopped — the unit to resume at. */
+  lastUnit: string | null;
+  openedAt: string;
+}
+
+export interface CourseUnit extends Unit {
+  done: boolean;
+}
 
 export interface Course {
-  path: string;
-  name: string;
+  id: string;
+  title: string;
   pageCount: number;
   hasPageLabels: boolean;
   outlineNodes: number;
-  units: Unit[];
+  lastUnit: string | null;
+  units: CourseUnit[];
+}
+
+export function shelf(): ShelfBook[] {
+  const rows = database()
+    .prepare(
+      `SELECT b.id, b.title, b.page_count, b.last_unit, b.opened_at,
+              COUNT(u.id)                                     AS units,
+              COALESCE(SUM(u.minutes), 0)                     AS minutes,
+              COUNT(u.done_at)                                AS done_units,
+              COALESCE(SUM(CASE WHEN u.done_at IS NOT NULL THEN u.minutes END), 0) AS done_minutes
+         FROM book b LEFT JOIN unit u ON u.book_id = b.id
+        GROUP BY b.id
+        ORDER BY b.opened_at DESC`,
+    )
+    .all() as any[];
+
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    pageCount: r.page_count,
+    units: Number(r.units),
+    minutes: Number(r.minutes),
+    doneUnits: Number(r.done_units),
+    doneMinutes: Number(r.done_minutes),
+    lastUnit: r.last_unit,
+    openedAt: r.opened_at,
+  }));
 }
 
 /**
- * One opened book per path, held for the life of the dev server.
+ * Ingest a PDF onto the shelf, or hand back the one already there.
  *
- * Ingest is fast enough (~2.5s) that persistence isn't needed yet — this is
- * what lets the viewer exist before the data-model ticket is settled. The
- * cached `Book` also keeps one pdf.js document alive per book, which page
- * rendering reuses and which font-alias stability depends on.
+ * Identity is the sha256 of the bytes, not the filename: re-adding the same
+ * file — renamed, moved, downloaded twice — returns the existing book with its
+ * progress intact and, crucially, **does not run the naming pass again**. That
+ * one model call is the only per-book cost in the system, and it is paid once.
  */
-const opened = new Map<string, Promise<{ book: Book; course: Course }>>();
+export async function add(
+  bytes: Uint8Array,
+  filename: string,
+  targetMinutes = DEFAULTS.targetMinutes,
+): Promise<{ id: string } | { error: string }> {
+  const db = database();
+  const id = createHash("sha256").update(bytes).digest("hex");
 
-export function ingest(path: string, targetMinutes = DEFAULTS.targetMinutes) {
-  const key = `${path}::${targetMinutes}`;
-  let existing = opened.get(key);
-  if (!existing) {
-    existing = load(path, targetMinutes);
-    opened.set(key, existing);
+  const known = db.prepare("SELECT id FROM book WHERE id = ?").get(id) as { id: string } | undefined;
+  if (known) {
+    touch(id);
+    return { id };
   }
-  return existing;
-}
 
-async function load(path: string, targetMinutes: number) {
-  const book = await Book.open(path);
-  let units = toUnits(chapters(segment(book)), { ...DEFAULTS, targetMinutes });
+  const title = filename.replace(/\.pdf$/i, "").trim() || "Untitled";
+  const file = join(SHELF, `${id}.pdf`);
+  await writeFile(file, bytes);
 
-  // Concept titles cost one call and ~14s, paid once per book because the
-  // result is cached above. Without a key the structural titles still work —
+  let units: Unit[];
+  let book: Book;
+  try {
+    book = await Book.open(file);
+    units = toUnits(chapters(segment(book)), { ...DEFAULTS, targetMinutes });
+  } catch (error) {
+    await rm(file, { force: true });
+    return { error: `${title} could not be read as a PDF (${(error as Error).message}).` };
+  }
+
+  if (units.length === 0) {
+    await rm(file, { force: true });
+    return {
+      error:
+        book.outline.length === 0
+          ? `${title} has no bookmark outline, so there is no structure to cut into units. throughline needs a book with chapters — a paper or a scan won't ingest.`
+          : `${title} has ${book.outline.length} outline nodes but none carry enough text to be a unit.`,
+    };
+  }
+
+  // The one AI call in the system. Without a key the structural titles stand —
   // "Summary" instead of "Transaction Isolation Recap", but nothing breaks.
-  if (units.length > 0 && process.env.ANTHROPIC_API_KEY) {
-    const name = path.split("/").pop()!.replace(/\.pdf$/i, "");
+  let named = false;
+  if (process.env.ANTHROPIC_API_KEY) {
     try {
-      units = await nameUnits(units, name);
+      units = await nameUnits(units, title);
+      named = true;
     } catch (error) {
-      console.warn(`naming failed for ${name}, keeping structural titles:`, error);
+      console.warn(`naming failed for ${title}, keeping structural titles:`, error);
     }
   }
 
-  const course: Course = {
-    path,
-    name: path.split("/").pop()!.replace(/\.pdf$/i, ""),
-    pageCount: book.pageCount,
-    hasPageLabels: book.pageLabels !== null,
-    outlineNodes: book.outline.length,
-    units,
+  const now = new Date().toISOString();
+  transaction(() => {
+    db.prepare(
+      `INSERT INTO book (id, title, file, page_count, has_page_labels, outline_nodes,
+                         target_minutes, named, added_at, opened_at, last_unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    ).run(
+      id,
+      title,
+      file,
+      book.pageCount,
+      book.pageLabels ? 1 : 0,
+      book.outline.length,
+      targetMinutes,
+      named ? 1 : 0,
+      now,
+      now,
+    );
+
+    const insert = db.prepare(
+      `INSERT INTO unit (book_id, id, ord, title, chapter, page_from, page_to,
+                         prose, code, minutes, covers, done_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    );
+    units.forEach((u, i) =>
+      insert.run(
+        id,
+        u.id,
+        i,
+        u.title,
+        u.chapter,
+        u.from,
+        u.to,
+        u.prose,
+        u.code,
+        u.minutes,
+        JSON.stringify(u.covers),
+      ),
+    );
+  });
+
+  return { id };
+}
+
+export function course(id: string): Course | null {
+  const db = database();
+  const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id) as any;
+  if (!book) return null;
+
+  const rows = db
+    .prepare("SELECT * FROM unit WHERE book_id = ? ORDER BY ord")
+    .all(id) as any[];
+
+  return {
+    id: book.id,
+    title: book.title,
+    pageCount: book.page_count,
+    hasPageLabels: book.has_page_labels === 1,
+    outlineNodes: book.outline_nodes,
+    lastUnit: book.last_unit,
+    units: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      chapter: r.chapter,
+      from: r.page_from,
+      to: r.page_to,
+      prose: r.prose,
+      code: r.code,
+      minutes: r.minutes,
+      covers: JSON.parse(r.covers) as string[],
+      done: r.done_at !== null,
+    })),
   };
-  return { book, course };
+}
+
+export function setDone(bookId: string, unitId: string, done: boolean): void {
+  database()
+    .prepare("UPDATE unit SET done_at = ? WHERE book_id = ? AND id = ?")
+    .run(done ? new Date().toISOString() : null, bookId, unitId);
+}
+
+/** Remember where reading stopped, so the shelf can offer to resume. */
+export function setPlace(bookId: string, unitId: string): void {
+  database()
+    .prepare("UPDATE book SET last_unit = ?, opened_at = ? WHERE id = ?")
+    .run(unitId, new Date().toISOString(), bookId);
+}
+
+export function touch(bookId: string): void {
+  database()
+    .prepare("UPDATE book SET opened_at = ? WHERE id = ?")
+    .run(new Date().toISOString(), bookId);
+}
+
+export async function forget(bookId: string): Promise<void> {
+  const db = database();
+  const row = db.prepare("SELECT file FROM book WHERE id = ?").get(bookId) as
+    | { file: string }
+    | undefined;
+  db.prepare("DELETE FROM book WHERE id = ?").run(bookId);
+  rendering.delete(bookId);
+  if (row) await rm(row.file, { force: true });
 }
 
 /**
- * Books available to ingest. `THROUGHLINE_BOOKS` (colon-separated paths) wins;
- * otherwise scan ~/Downloads, which is where books actually land.
+ * The opened PDF behind a shelved book, for page rendering only. Held for the
+ * life of the server: the first page of a unit pays the open, the rest don't.
  */
-export async function library(): Promise<{ path: string; name: string; mb: number }[]> {
-  const configured = process.env.THROUGHLINE_BOOKS;
-  const paths = configured
-    ? configured.split(":").filter(Boolean)
-    : await scan(join(homedir(), "Downloads"));
+const rendering = new Map<string, Promise<Pages>>();
 
-  const sized = await Promise.all(
-    paths.map(async (path) => ({
-      path,
-      name: path.split("/").pop()!.replace(/\.pdf$/i, ""),
-      mb: await size(path),
-    })),
-  );
+export function pages(bookId: string): Promise<Pages> | null {
+  const existing = rendering.get(bookId);
+  if (existing) return existing;
 
-  // Biggest first. A folder of PDFs is mostly papers and receipts; books are the
-  // large ones, so size alone floats the plausible candidates to the top without
-  // having to open all of them.
-  return sized.sort((a, b) => b.mb - a.mb);
-}
+  const row = database().prepare("SELECT file FROM book WHERE id = ?").get(bookId) as
+    | { file: string }
+    | undefined;
+  if (!row) return null;
 
-async function scan(dir: string): Promise<string[]> {
-  try {
-    const entries = await readdir(dir);
-    return entries.filter((f) => f.toLowerCase().endsWith(".pdf")).map((f) => join(dir, f));
-  } catch {
-    return [];
-  }
-}
-
-async function size(path: string): Promise<number> {
-  try {
-    return Math.round(((await stat(path)).size / 1024 / 1024) * 10) / 10;
-  } catch {
-    return 0;
-  }
+  const opening = Pages.open(row.file);
+  rendering.set(bookId, opening);
+  return opening;
 }

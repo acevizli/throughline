@@ -34,7 +34,6 @@ export class Book {
     readonly outline: OutlineNode[],
     readonly density: PageDensity[],
     private readonly printedIndex: Map<string, number>,
-    private readonly doc: any,
   ) {}
 
   static async open(path: string): Promise<Book> {
@@ -67,28 +66,7 @@ export class Book {
       if (!printedIndex.has(label)) printedIndex.set(label, i + 1);
     });
 
-    return new Book(path, doc.numPages, pageLabels, outline, density, printedIndex, doc);
-  }
-
-  /**
-   * Render one page to a PNG.
-   *
-   * Server-side rather than shipping the PDF to the browser: it keeps pdf.js
-   * out of the client bundle entirely, which is where the Next.js integration
-   * pain lives (worker resolution, Terser on .mjs, the file tracer missing
-   * dynamic imports). The cost is no selectable text layer in the viewer —
-   * fine for reading, and the coordinate work for highlighting can move
-   * client-side later without changing the ingest half.
-   */
-  async renderPage(page: number, scale = 2): Promise<Buffer> {
-    const { createCanvas } = await import("@napi-rs/canvas");
-    const pdfPage = await this.doc.getPage(page);
-    const viewport = pdfPage.getViewport({ scale });
-    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    const context = canvas.getContext("2d");
-    await pdfPage.render({ canvasContext: context as any, viewport, canvas: canvas as any }).promise;
-    pdfPage.cleanup();
-    return canvas.toBuffer("image/png");
+    return new Book(path, doc.numPages, pageLabels, outline, density, printedIndex);
   }
 
   /**
@@ -115,6 +93,47 @@ export class Book {
       total += this.density[p][key];
     }
     return total;
+  }
+}
+
+/**
+ * A book opened only to be looked at.
+ *
+ * Reading a shelved book must not pay for ingest again: `Book.open` walks every
+ * page for its text density, which is seconds of work the viewer has no use for
+ * — its units already came out of the database.
+ */
+export class Pages {
+  private constructor(
+    readonly pageCount: number,
+    private readonly doc: any,
+  ) {}
+
+  static async open(path: string): Promise<Pages> {
+    const data = new Uint8Array(await readFile(path));
+    const doc = await pdfjs.getDocument({ data, verbosity: 0 }).promise;
+    return new Pages(doc.numPages, doc);
+  }
+
+  /**
+   * Render one page to a PNG.
+   *
+   * Server-side rather than shipping the PDF to the browser: it keeps pdf.js
+   * out of the client bundle entirely, which is where the Next.js integration
+   * pain lives (worker resolution, Terser on .mjs, the file tracer missing
+   * dynamic imports). The cost is no selectable text layer in the viewer —
+   * fine for reading, and the coordinate work for highlighting can move
+   * client-side later without changing the ingest half.
+   */
+  async render(page: number, scale = 2): Promise<Buffer> {
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const pdfPage = await this.doc.getPage(page);
+    const viewport = pdfPage.getViewport({ scale });
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const context = canvas.getContext("2d");
+    await pdfPage.render({ canvasContext: context as any, viewport, canvas: canvas as any }).promise;
+    pdfPage.cleanup();
+    return canvas.toBuffer("image/png");
   }
 }
 

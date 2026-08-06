@@ -6,6 +6,7 @@
   --dim: #8c857a;
   --accent: #c97b4a;
   --code: #6f8f7a;
+  --done: #6f8f7a;
 }
 
 @media (prefers-color-scheme: light) {
@@ -17,6 +18,7 @@
     --dim: #7a7266;
     --accent: #b3653a;
     --code: #4a6b56;
+    --done: #4a6b56;
   }
 }
 
@@ -47,6 +49,11 @@ button {
   display: grid;
   grid-template-columns: 380px 1fr;
   height: 100vh;
+}
+
+/* Full reading mode: the roadmap is unmounted, the page gets the window. */
+.app.focus {
+  grid-template-columns: 1fr;
 }
 
 /* ── left: the roadmap ─────────────────────────────────────────── */
@@ -98,20 +105,53 @@ button {
   color: var(--dim);
 }
 
-.unit {
-  display: block;
-  width: 100%;
-  padding: 9px 20px;
+.unitrow {
+  display: flex;
+  align-items: flex-start;
   border-left: 2px solid transparent;
 }
 
-.unit:hover {
+.unitrow:has(.unit[aria-current="true"]) {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.unitrow:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.unit[aria-current="true"] {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+.unitrow[data-done="true"] .unit-title,
+.unitrow[data-done="true"] .unit-meta {
+  color: var(--dim);
+}
+
+.tick {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 11px 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--bg);
+}
+
+.tick:hover {
+  border-color: var(--accent);
+}
+
+.unitrow[data-done="true"] .tick {
+  background: var(--done);
+  border-color: var(--done);
+}
+
+.unit {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 20px 9px 8px;
 }
 
 .unit-head {
@@ -133,6 +173,7 @@ button {
 }
 
 .unit-meta {
+  display: block;
   margin-top: 2px;
   margin-left: 30px;
   font-size: 11.5px;
@@ -147,8 +188,9 @@ button {
 /* ── right: the book ───────────────────────────────────────────── */
 
 .reader {
-  overflow-y: auto;
+  overflow: auto;
   scroll-behavior: smooth;
+  position: relative;
 }
 
 .readerbar {
@@ -156,9 +198,9 @@ button {
   top: 0;
   z-index: 2;
   display: flex;
-  gap: 16px;
-  align-items: baseline;
-  padding: 14px 24px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 24px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
@@ -182,18 +224,34 @@ button {
   line-height: 1.6;
 }
 
+/* max-content + min-width keeps a zoomed-past-the-window page centred while
+   still scrolling to its left edge, which plain `align-items: center` clips. */
 .pages {
   padding: 20px 24px 60px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  width: max-content;
+  min-width: 100%;
+  margin-inline: auto;
+}
+
+.pages.bare {
+  padding: 12px 12px 72px;
+  gap: 10px;
+}
+
+.pages figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 
 .pages img {
-  width: 100%;
-  max-width: 760px;
   height: auto;
+  max-width: none;
   border: 1px solid var(--line);
   background: #fff;
 }
@@ -204,20 +262,108 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── picker + empty states ─────────────────────────────────────── */
+/* ── controls ──────────────────────────────────────────────────── */
 
-.center {
-  display: grid;
-  place-items: center;
+.ghost {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.6;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.ghost:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.zoomlevel {
+  min-width: 52px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-sep {
+  flex: none;
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 2px;
+}
+
+.readerbar .hud-sep {
+  margin-left: auto;
+  background: none;
+}
+
+/* Focus-mode overlay: the only chrome left on screen. */
+.hud {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  max-width: min(760px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.28);
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+
+.hud:hover,
+.hud:focus-within {
+  opacity: 1;
+}
+
+.hud .ghost {
+  border-color: transparent;
+}
+
+.hud-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-meta {
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── the shelf ─────────────────────────────────────────────────── */
+
+.shelfpage {
   height: 100vh;
-  padding: 40px;
+  overflow-y: auto;
+  padding: 56px 40px 80px;
 }
 
-.picker {
-  width: min(560px, 100%);
+.shelfhead {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  max-width: 1080px;
+  margin: 0 auto 28px;
 }
 
-.picker h1 {
+.shelfhead h1 {
   font-size: 13px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -225,24 +371,8 @@ button {
   margin-bottom: 4px;
 }
 
-.picker p {
-  color: var(--dim);
-  font-size: 13.5px;
-  margin-bottom: 20px;
-}
-
-.picker button {
-  display: block;
-  width: 100%;
-  padding: 11px 14px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  margin-bottom: 8px;
-  background: var(--panel);
-}
-
-.picker button:hover {
-  border-color: var(--accent);
+.shelfhead > div {
+  flex: 1;
 }
 
 .muted {
@@ -250,37 +380,143 @@ button {
   font-size: 13.5px;
 }
 
-.filter {
-  width: 100%;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
-}
-
-.filter:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.pickerlist {
-  max-height: 46vh;
-  overflow-y: auto;
-}
-
-.picker button {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: baseline;
-}
-
-.size {
-  color: var(--dim);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+.primary {
   flex: none;
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.failed {
+  max-width: 1080px;
+  margin: 0 auto 20px;
+  padding: 12px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.card:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+
+.cardopen {
+  display: block;
+  width: 100%;
+  padding: 16px 18px 14px;
+}
+
+.card h2 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  /* Titles come from filenames and run long; two lines, then ellipsis. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.7em;
+}
+
+.card.working {
+  padding: 16px 18px;
+  border-style: dashed;
+}
+
+.card.working h2 {
+  min-height: 0;
+  margin-bottom: 6px;
+}
+
+.card.working p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.bar {
+  height: 4px;
+  margin: 12px 0 8px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  background: var(--done);
+}
+
+.cardstats {
+  font-size: 12.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.cardstats strong {
+  color: var(--ink);
+}
+
+.cardgo {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--accent);
+}
+
+.remove {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--dim);
+  opacity: 0;
+}
+
+.card:hover .remove {
+  opacity: 1;
+}
+
+.remove:hover {
+  color: var(--accent);
+}
+
+/* The sidebar's own progress bar sits under the book title. */
+.masthead .bar {
+  margin: 10px 0 6px;
+}
+
+.ghost.done {
+  color: var(--done);
+  border-color: color-mix(in srgb, var(--done) 50%, transparent);
 }

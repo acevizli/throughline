@@ -59,10 +59,15 @@ npm install
 npm run dev            # http://localhost:3000
 ```
 
-Pick a book from the picker (it lists PDFs in `~/Downloads`, biggest first — override with
-`THROUGHLINE_BOOKS`, a colon-separated list of paths). Ingest takes a couple of seconds;
-unit titles need `ANTHROPIC_API_KEY` in `.env` and add about fifteen seconds the first time
-a book is opened. Without a key you still get units, just structural titles.
+**Open a book** picks a PDF from disk and adds it to the shelf. Ingest takes a couple of
+seconds; unit titles need `ANTHROPIC_API_KEY` in `.env` and add about ten seconds — **paid
+once per book, ever**. Without a key you still get units, just structural titles.
+
+After that the book lives on the shelf with its progress, and opens instantly. Tick a unit
+off as you finish it; the card shows how far in you are and where to resume. The shelf is
+a SQLite database plus a copy of each PDF under `~/.throughline` (override with
+`THROUGHLINE_HOME`) — books are copied in rather than referenced, so moving the original
+out of Downloads doesn't cost you the ingest.
 
 There's also a CLI that prints the unit list and exits:
 
@@ -72,9 +77,9 @@ npm run ingest -- ~/Downloads/book.pdf 35 --name
 
 ## Status
 
-Early, but usable. Ingest works and the reader works: units on the left, the actual
-rendered pages on the right. Not built yet — objectives, primers, recall questions,
-grading, and the "leans on" panel.
+Early, but usable. A book you add stays added: shelf, per-unit completion, resume where
+you left off, and a full-page reading mode that zooms the page instead of the browser tab.
+Not built yet — objectives, primers, recall questions, grading, and the "leans on" panel.
 
 The design is charted as a wayfinder map — **[issue #1](https://github.com/acevizli/throughline/issues/1)**
 holds the locked decisions, the fog that isn't sharp enough to ticket yet, and what's
