@@ -263,6 +263,10 @@ button {
   font-size: 11px;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
+  /* A selection dragged from one page into the next runs straight through this
+     caption, and it would land in the clipboard between the two pages' text.
+     The book's own printed folio still copies — that one is on the page. */
+  user-select: none;
 }
 
 /* ── the text layer ────────────────────────────────────────────── */
