@@ -27,29 +27,35 @@ Issues live as GitHub issues on `acevizli/throughline`. Use the `gh` CLI. There 
 
 Used by `/wayfinder`.
 
-- **Map**: issue **#1**, labelled `wayfinder:map`. Holds Destination / Notes /
-  Decisions-so-far / Not-yet-specified / Out-of-scope.
-- **Child ticket**: a native GitHub **sub-issue** of #1, labelled `wayfinder:<type>`
+- **Maps**: issues labelled `wayfinder:map`, each holding Destination / Notes /
+  Decisions-so-far / Not-yet-specified / Out-of-scope. There are two, and every child
+  ticket belongs to exactly one:
+  - **#1** — the course over the book: roadmap, units, briefings, grading, the reader.
+  - **#21** — retrieval inside the book: highlight a sentence, get the other passages that
+    discuss it. Shares #1's standing constraint and nothing else.
+- **Child ticket**: a native GitHub **sub-issue** of its map, labelled `wayfinder:<type>`
   (`research` / `prototype` / `grilling` / `task`).
-  List them: `gh api repos/acevizli/throughline/issues/1/sub_issues`
+  List them: `gh api repos/acevizli/throughline/issues/<map>/sub_issues`
 - **Blocking**: native issue dependencies.
   Add: `gh api --method POST repos/acevizli/throughline/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`
   where the db id is `gh api repos/acevizli/throughline/issues/<n> --jq .id` — **not** the
   `#number`.
-- **Frontier** — open, no open blockers, unassigned:
+- **Frontier** — open, no open blockers, unassigned. Run it per map:
 
   ```bash
-  gh api repos/acevizli/throughline/issues/1/sub_issues --jq '
-    .[] | select(.state=="open")
-        | select((.issue_dependencies_summary.blocked_by // 0) == 0)
-        | select(.assignees | length == 0)
-        | "#\(.number)  \(.title)"'
+  for map in 1 21; do
+    gh api repos/acevizli/throughline/issues/$map/sub_issues --jq '
+      .[] | select(.state=="open")
+          | select((.issue_dependencies_summary.blocked_by // 0) == 0)
+          | select(.assignees | length == 0)
+          | "#\(.number)  \(.title)"'
+  done
   ```
 
 - **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write, before
   any work.
 - **Resolve**: `gh issue comment <n>` with the answer, `gh issue close <n>`, then append a
-  one-line gist + link to Decisions-so-far in #1.
+  one-line gist + link to Decisions-so-far in **the map that owns the ticket**.
 
 ### Execution override
 
