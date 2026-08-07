@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskedQuestion, Course, CourseUnit, Marked, Quiz, ShelfBook } from "../lib/library";
 import type { Key } from "../src/ingest/brief";
+import { TextLayer } from "./text-layer";
 
 /** Zoom is a multiplier over fit-width, so 1 is "the page fills its column". */
 const ZOOM_MIN = 0.5;
@@ -10,6 +11,14 @@ const ZOOM_MAX = 4;
 const ZOOM_STEP = 1.15;
 
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+/** Whichever page is at the top of the reading pane right now. */
+function topPage(): number | null {
+  for (const figure of document.querySelectorAll<HTMLElement>(".pages figure")) {
+    if (figure.getBoundingClientRect().bottom > 100) return Number(figure.id.replace("page-", ""));
+  }
+  return null;
+}
 
 export default function Home() {
   const [books, setBooks] = useState<ShelfBook[] | null>(null);
@@ -76,14 +85,68 @@ export default function Home() {
     [course],
   );
 
-  /** A page anchor was followed out of the results panel. */
-  const jump = useCallback((page: number) => {
-    setQuizzing(null);
-    // After the overlay unmounts, so the target isn't behind it.
-    requestAnimationFrame(() =>
-      document.getElementById(`page-${page}`)?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
-  }, []);
+  /** A page the reader asked to be taken to, once it's on screen to be taken to. */
+  const [pending, setPending] = useState<number | null>(null);
+
+  /**
+   * Where a cross-unit jump came from, so it can be undone.
+   *
+   * Tagged with the unit it landed on rather than cleared on every other kind
+   * of navigation: the offer to go back is only meaningful while you are still
+   * standing where the link put you.
+   */
+  const [origin, setOrigin] = useState<{ from: number; page: number | null; to: number } | null>(
+    null,
+  );
+
+  /**
+   * A page anchor was followed — out of the results panel, or off one of the
+   * book's own cross-references.
+   *
+   * Question anchors always land inside the unit that asked them, but the
+   * book's links point wherever the author pointed: `see "B-Trees" on page 79`
+   * from chapter 7 is four units back. Only the current unit's pages are
+   * rendered, so the unit has to move first or the anchor is a dead link.
+   */
+  const jump = useCallback(
+    (page: number) => {
+      setQuizzing(null);
+      const units = course?.units ?? [];
+      const target = units.findIndex((u) => page >= u.from && page <= u.to);
+      if (target !== -1 && target !== current) {
+        // Following a citation out of the unit you were reading should not cost
+        // you your place in it.
+        setOrigin({ from: current, page: topPage(), to: target });
+        setCurrent(target);
+      }
+      setPending(page);
+    },
+    [course, current],
+  );
+
+  /**
+   * Scroll to a followed page once it exists.
+   *
+   * Deferred to an effect rather than done in the handler because following a
+   * link across units re-renders the whole pane; the element only exists after
+   * that render. Child effects run first, so this also beats the reader's own
+   * scroll-to-top on a unit change.
+   */
+  useEffect(() => {
+    if (pending === null) return;
+    document
+      .getElementById(`page-${pending}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setPending(null);
+  }, [pending, current]);
+
+  /** Undo the last jump that left the unit, landing back on the page you left. */
+  const unjump = useCallback(() => {
+    if (!origin) return;
+    setCurrent(origin.from);
+    setPending(origin.page);
+    setOrigin(null);
+  }, [origin]);
 
   // Zoom and unit keys live on the window, because in focus mode there is no
   // chrome to click. Cmd/Ctrl +/-/0 are swallowed so the *page* zooms instead
@@ -204,6 +267,9 @@ export default function Home() {
         }
         onDone={(done) => setDone(current, done)}
         onQuiz={() => setQuizzing(course.units[current].id)}
+        onFollow={jump}
+        back={origin?.to === current ? course.units[origin.from].title : null}
+        onUnjump={unjump}
       />
       {quizzing && (
         <Questions
@@ -705,6 +771,9 @@ function Reader({
   onStep,
   onDone,
   onQuiz,
+  onFollow,
+  back,
+  onUnjump,
 }: {
   book: string;
   unit: CourseUnit;
@@ -716,6 +785,10 @@ function Reader({
   onStep: (delta: number) => void;
   onDone: (done: boolean) => void;
   onQuiz: () => void;
+  onFollow: (page: number) => void;
+  /** The unit a followed link took you out of, while you're still away from it. */
+  back: string | null;
+  onUnjump: () => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [column, setColumn] = useState(760);
@@ -797,6 +870,11 @@ function Reader({
                 : "questions"}
             </button>
           )}
+          {back && (
+            <button className="ghost" onClick={onUnjump} title="back to where you were reading">
+              ← {back}
+            </button>
+          )}
           {zoomControls}
           <button className="ghost" onClick={() => onFocus(true)} title="full page  f">
             full page
@@ -808,15 +886,20 @@ function Reader({
 
       <div className={focus ? "pages bare" : "pages"}>
         {pages.map((page) => (
-          // The id is what a page anchor in the results panel scrolls to.
+          // The id is what a page anchor scrolls to — from the results panel,
+          // and from the book's own cross-references.
           <figure key={page} id={`page-${page}`}>
-            {/* Server-rendered PNG — see Pages.render for why not client-side pdf.js. */}
-            <img
-              src={`/api/page?book=${book}&page=${page}&scale=${scale}`}
-              alt={`page ${page}`}
-              style={{ width }}
-              loading="lazy"
-            />
+            <div className="pageframe" style={{ width }}>
+              {/* Server-rendered PNG — see Pages.render for why not client-side pdf.js. */}
+              <img
+                src={`/api/page?book=${book}&page=${page}&scale=${scale}`}
+                alt={`page ${page}`}
+                loading="lazy"
+              />
+              {/* …and the words themselves on top of it, so the picture of a
+                  page is a page again. See Pages.geometry. */}
+              <TextLayer book={book} page={page} width={width} onFollow={onFollow} />
+            </div>
             <figcaption className="pagenum">{page}</figcaption>
           </figure>
         ))}
@@ -853,6 +936,14 @@ function Reader({
             {unit.done ? "✓" : "mark done"}
           </button>
           <span className="hud-sep" />
+          {back && (
+            <>
+              <button className="ghost" onClick={onUnjump} title="back to where you were reading">
+                ← {back}
+              </button>
+              <span className="hud-sep" />
+            </>
+          )}
           {zoomControls}
           <span className="hud-sep" />
           <button className="ghost" onClick={() => onFocus(false)} title="exit  esc">

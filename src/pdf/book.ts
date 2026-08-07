@@ -19,6 +19,65 @@ export interface PageDensity {
 }
 
 /**
+ * One text item, placed the way pdf.js's own `TextLayer` places it.
+ *
+ * Coordinates are in PDF units with the origin at the page box's top-left, so
+ * nothing here knows what scale the page was rendered at — the browser divides
+ * by the page box and multiplies by whatever width the image is given. That is
+ * what lets one response serve every zoom level.
+ *
+ * `x`/`y` are the *baseline* origin rather than the span's corner, because the
+ * corner needs a font ascent and the ascent depends on the font the browser
+ * substitutes. That one number is the only thing the client has to measure.
+ */
+export interface TextSpan {
+  str: string;
+  x: number;
+  y: number;
+  /** Font height in PDF units. */
+  height: number;
+  /** Radians. 0 for ordinary horizontal text, which is nearly all of it. */
+  angle: number;
+  /** The width the PDF draws it at, when the span must be stretched to match; else null. */
+  drawn: number | null;
+  /** A generic CSS family — `serif`, `sans-serif`, `monospace`. */
+  family: string;
+  dir: string;
+  /** pdf.js ends a line after any item carrying this, text or not. See `TextSpan` use in the reader. */
+  eol: boolean;
+}
+
+/** One of the book's own links, as a box over the page. */
+export interface PageLink {
+  /** Fractions of the page box. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** 1-based page it points at; null when it points out of the book. */
+  page: number | null;
+  /** Where it points outside the book. Never null at the same time as `page`. */
+  url: string | null;
+  /**
+   * The PDF's own name for the destination — `sec_storage_b_trees`, `ch_storage`.
+   *
+   * Kept because the name classifies the edge mechanically: DDIA's `sec_*` and
+   * `ch_*` links are the cross-references, and the other 83% are index and
+   * bibliography plumbing. Null on books whose destinations are raw arrays.
+   */
+  dest: string | null;
+}
+
+/** Everything needed to lay a selectable text layer over a rendered page. */
+export interface PageGeometry {
+  /** The page box in PDF units — the denominator for every coordinate above. */
+  width: number;
+  height: number;
+  spans: TextSpan[];
+  links: PageLink[];
+}
+
+/**
  * A book opened for ingest. Everything the structural pass needs, read once.
  *
  * Deliberately does not expose the pdf.js document: `fontName` is a load-order
@@ -154,14 +213,87 @@ export class Pages {
   }
 
   /**
+   * Where every word on a page sits, and where every link on it goes.
+   *
+   * This is the other half of `render`: the PNG is what you look at, this is
+   * what you select, copy and click. It stays on the server for the same reason
+   * the render does — the browser would need pdf.js and the whole PDF to work
+   * out numbers that take ~20 ms here, and the alias resolution below must not
+   * escape this load. Measured at 5–10 KB a page against the PNG's ~660 KB.
+   *
+   * The arithmetic is pdf.js's own `TextLayer`, moved to the server; see
+   * docs/research/02-interactive-page-pane.md for why that is possible at all.
+   */
+  async geometry(page: number): Promise<PageGeometry> {
+    const pdfPage = await this.doc.getPage(page);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const { pageWidth, pageHeight, pageX, pageY } = viewport.rawDims;
+
+    // pdf.js's text-layer transform: flip the y axis and put the origin at the
+    // page box's top-left. `TextLayer` constructor, build/pdf.mjs:14877.
+    const flip = [1, 0, 0, -1, -pageX, pageY + pageHeight];
+
+    const content = await pdfPage.getTextContent();
+    const spans: TextSpan[] = [];
+    for (const item of content.items as any[]) {
+      if (typeof item.str !== "string") continue;
+      // Resolved here, like `Book.open` does: the alias is only meaningful
+      // within the load that produced it and must never reach the client.
+      const style = content.styles?.[item.fontName];
+      const tx = pdfjs.Util.transform(flip, item.transform);
+      const angle = Math.atan2(tx[1], tx[0]) + (style?.vertical ? Math.PI / 2 : 0);
+
+      spans.push({
+        str: item.str,
+        x: tx[4],
+        y: tx[5],
+        height: Math.hypot(tx[2], tx[3]),
+        angle,
+        drawn: stretched(item, style) ? (style?.vertical ? item.height : item.width) : null,
+        family: style?.fontFamily ?? "sans-serif",
+        dir: item.dir ?? "ltr",
+        eol: Boolean(item.hasEOL),
+      });
+    }
+
+    const links: PageLink[] = [];
+    for (const annotation of (await pdfPage.getAnnotations()) as any[]) {
+      if (annotation.subtype !== "Link") continue;
+      // Annotation rects are in the PDF's own bottom-left space, so they get
+      // the same flip the spans got — expressed as fractions, since a link box
+      // has no font size to carry.
+      const [x1, y1, x2, y2] = annotation.rect;
+
+      // An annotation that resolves to nowhere is not a link. DDIA has none —
+      // all 6,985 internal links resolve — but Clean Code carries 1,751 with no
+      // destination at all, and drawn over the page they are dead anchors.
+      const target = annotation.dest ? await resolveDestination(this.doc, annotation.dest) : null;
+      const url = annotation.url ?? null;
+      if (target === null && url === null) continue;
+
+      links.push({
+        left: (Math.min(x1, x2) - pageX) / pageWidth,
+        top: (pageY + pageHeight - Math.max(y1, y2)) / pageHeight,
+        width: Math.abs(x2 - x1) / pageWidth,
+        height: Math.abs(y2 - y1) / pageHeight,
+        page: target,
+        url,
+        dest: typeof annotation.dest === "string" ? annotation.dest : null,
+      });
+    }
+
+    pdfPage.cleanup();
+    return { width: pageWidth, height: pageHeight, spans, links };
+  }
+
+  /**
    * Render one page to a PNG.
    *
    * Server-side rather than shipping the PDF to the browser: it keeps pdf.js
    * out of the client bundle entirely, which is where the Next.js integration
    * pain lives (worker resolution, Terser on .mjs, the file tracer missing
-   * dynamic imports). The cost is no selectable text layer in the viewer —
-   * fine for reading, and the coordinate work for highlighting can move
-   * client-side later without changing the ingest half.
+   * dynamic imports). The text layer that costs — see `geometry`, which puts
+   * selection back without giving any of this up.
    */
   async render(page: number, scale = 2): Promise<Buffer> {
     const { createCanvas } = await import("@napi-rs/canvas");
@@ -173,6 +305,22 @@ export class Pages {
     pdfPage.cleanup();
     return canvas.toBuffer("image/png");
   }
+}
+
+/**
+ * Whether a span has to be squeezed to the width the PDF drew it at.
+ *
+ * A substituted font almost never measures the same as the embedded one, so
+ * anything longer than a character gets stretched to match; single characters
+ * are left alone unless the PDF itself distorted them. `TextLayer#appendText`,
+ * build/pdf.mjs:15037.
+ */
+function stretched(item: any, style: any): boolean {
+  if (item.str.length > 1) return true;
+  if (item.str === " " || item.transform[0] === item.transform[3]) return false;
+  const x = Math.abs(item.transform[0]);
+  const y = Math.abs(item.transform[3]);
+  return x !== y && Math.max(x, y) / Math.min(x, y) > 1.5;
 }
 
 async function flattenOutline(doc: any): Promise<OutlineNode[]> {

@@ -252,16 +252,111 @@ button {
 }
 
 .pages img {
-  height: auto;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   max-width: none;
-  border: 1px solid var(--line);
-  background: #fff;
 }
 
 .pagenum {
   font-size: 11px;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
+  /* A selection dragged from one page into the next runs straight through this
+     caption, and it would land in the clipboard between the two pages' text.
+     The book's own printed folio still copies — that one is on the page. */
+  user-select: none;
+}
+
+/* ── the text layer ────────────────────────────────────────────── */
+
+/*
+ * Transparent copies of the page's own words, laid over the PNG so it can be
+ * selected, copied and clicked. Lifted from pdf.js's web/pdf_viewer.css, which
+ * is the reference implementation; see app/text-layer.tsx.
+ *
+ * The only two numbers here are --scale (rendered width ÷ page width) and each
+ * span's --font-height in PDF units. Zoom changes the first and nothing else,
+ * which is what makes the layer free to re-scale.
+ */
+/*
+ * The page's box, held open before anything has loaded into it.
+ *
+ * The height has to come from the aspect ratio rather than from the image,
+ * because until a page has its height every page in the unit is stacked at the
+ * top of the pane — which makes them all "near the viewport", so the browser
+ * fetches every PNG and every text layer at once. A forty-page unit would open
+ * by rendering forty pages. The ratio is the real one as soon as any page's
+ * geometry has arrived; the fallback is US Letter, and only shows for the first
+ * few milliseconds of the first book ever opened.
+ *
+ * The border lives here rather than on the image, so the layer's inset:0 lines
+ * up with the page rather than with the page plus a pixel of chrome.
+ */
+.pageframe {
+  position: relative;
+  line-height: 1;
+  aspect-ratio: var(--page-aspect, 0.7727);
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.textlayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  z-index: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  --min-font-size: 1;
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.textlayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+
+.textlayer span {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--scale) * var(--min-font-size) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textlayer ::selection {
+  background: rgb(120 160 255 / 0.4);
+}
+
+/* The book's own cross-references. Above the text so they stay clickable,
+   invisible until pointed at so the page still looks like the page. */
+.pagelink {
+  position: absolute;
+  z-index: 2;
+  border-radius: 2px;
+}
+
+.pagelink:hover {
+  background: rgb(120 160 255 / 0.25);
+  outline: 1px solid rgb(120 160 255 / 0.5);
+}
+
+/* Tabbing through a page reaches these, and there is nothing else to see when
+   it does: the anchor is an empty box over the book's own words. */
+.pagelink:focus-visible {
+  background: rgb(120 160 255 / 0.25);
+  outline: 2px solid rgb(120 160 255 / 0.9);
+  outline-offset: 1px;
 }
 
 /* ── controls ──────────────────────────────────────────────────── */
