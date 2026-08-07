@@ -56,6 +56,7 @@ export interface PageLink {
   height: number;
   /** 1-based page it points at; null when it points out of the book. */
   page: number | null;
+  /** Where it points outside the book. Never null at the same time as `page`. */
   url: string | null;
   /**
    * The PDF's own name for the destination — `sec_storage_b_trees`, `ch_storage`.
@@ -262,13 +263,21 @@ export class Pages {
       // the same flip the spans got — expressed as fractions, since a link box
       // has no font size to carry.
       const [x1, y1, x2, y2] = annotation.rect;
+
+      // An annotation that resolves to nowhere is not a link. DDIA has none —
+      // all 6,985 internal links resolve — but Clean Code carries 1,751 with no
+      // destination at all, and drawn over the page they are dead anchors.
+      const target = annotation.dest ? await resolveDestination(this.doc, annotation.dest) : null;
+      const url = annotation.url ?? null;
+      if (target === null && url === null) continue;
+
       links.push({
         left: (Math.min(x1, x2) - pageX) / pageWidth,
         top: (pageY + pageHeight - Math.max(y1, y2)) / pageHeight,
         width: Math.abs(x2 - x1) / pageWidth,
         height: Math.abs(y2 - y1) / pageHeight,
-        page: annotation.dest ? await resolveDestination(this.doc, annotation.dest) : null,
-        url: annotation.url ?? null,
+        page: target,
+        url,
         dest: typeof annotation.dest === "string" ? annotation.dest : null,
       });
     }

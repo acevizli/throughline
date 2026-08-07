@@ -3,8 +3,12 @@ import { pages } from "../../../lib/library";
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const book = params.get("book");
+  // Whole numbers only: pdf.js indexes pages by integer, and `page=1.5` gets
+  // all the way to getPage() before failing as a 500.
   const page = Number(params.get("page"));
-  if (!book || !page) return new Response("book and page required", { status: 400 });
+  if (!book || !Number.isInteger(page) || page < 1) {
+    return new Response("book and a whole page number required", { status: 400 });
+  }
 
   // The reader asks for a sharper render as it zooms in, in whole steps so the
   // browser cache still hits. Clamped because scale is a canvas allocation.
@@ -14,7 +18,7 @@ export async function GET(request: Request) {
   if (!opening) return new Response("no such book", { status: 404 });
 
   const pdf = await opening;
-  if (page < 1 || page > pdf.pageCount) return new Response("out of range", { status: 404 });
+  if (page > pdf.pageCount) return new Response("out of range", { status: 404 });
 
   return new Response(new Uint8Array(await pdf.render(page, scale)), {
     headers: {

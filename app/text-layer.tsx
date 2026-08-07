@@ -113,6 +113,10 @@ export function TextLayer({
           href={link.url ?? `#page-${link.page}`}
           target={link.url ? "_blank" : undefined}
           rel={link.url ? "noreferrer" : undefined}
+          // These anchors have no text — they are boxes over the page's own
+          // words — so without this they reach a keyboard or a screen reader
+          // as an unnamed link. Doubles as a tooltip saying where it goes.
+          title={link.url ?? `page ${link.page}`}
           onClick={(event) => {
             if (link.url || link.page === null) return;
             event.preventDefault();

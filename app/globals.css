@@ -351,6 +351,14 @@ button {
   outline: 1px solid rgb(120 160 255 / 0.5);
 }
 
+/* Tabbing through a page reaches these, and there is nothing else to see when
+   it does: the anchor is an empty box over the book's own words. */
+.pagelink:focus-visible {
+  background: rgb(120 160 255 / 0.25);
+  outline: 2px solid rgb(120 160 255 / 0.9);
+  outline-offset: 1px;
+}
+
 /* ── controls ──────────────────────────────────────────────────── */
 
 .ghost {
