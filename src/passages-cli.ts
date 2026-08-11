@@ -92,7 +92,7 @@ for (let i = 0; i < sample; i++) {
   // A chapter's opening pages sit in a segment named after the chapter, so the
   // breadcrumb would otherwise read "Chapter 25 › Chapter 25".
   const where = [p.chapter, p.section].filter((s, i, all) => s && all.indexOf(s) === i).join(" › ");
-  console.log(`\n  [${p.ord}] ${p.id}  ${range}  ${where}`);
+  console.log(`\n  [${p.ord}] ${p.id.slice(0, 12)}…  ${range}  ${where}`);
   console.log(wrap(p.text, 92, "      "));
 }
 // Books shelved before passages existed have none, and re-adding the PDF would

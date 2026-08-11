@@ -80,6 +80,13 @@ export function passages(
   /** A slice to extract instead of the body, in 1-based PDF pages. For probes. */
   range?: { from: number; to: number },
 ): PassageReport {
+  // A flag with its value left off reads as 0, and NaN compares false against
+  // everything — both would once have hung here rather than complained.
+  if (!(options.size > 0)) throw new Error(`passage size must be above zero, got ${options.size}`);
+  if (!(options.overlap >= 0 && options.overlap < 1)) {
+    throw new Error(`passage overlap must be at least 0 and below 1, got ${options.overlap}`);
+  }
+
   const { from, to } = range ?? body(book);
   const furniture = runningHeads(book, from, to);
   const breaks = breakHyphens(book, from, to);
@@ -178,9 +185,15 @@ export function passages(
  * Ordinal ids would survive a restart too, but not a re-extraction: changing
  * the window size by a character would leave every vector attached to text it
  * was not made from. That failure is silent, which is why it isn't risked.
+ *
+ * The whole digest, not a prefix of it. A prefix that collided would not error
+ * — the loop below reads a repeated id as the same passage twice and drops the
+ * second — so the failure mode is a passage vanishing from the book. At 64 bits
+ * that is around one book in ten trillion, and at 256 it is nothing at all,
+ * which is worth 48 bytes a row.
  */
 function identify(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /**
@@ -301,7 +314,12 @@ function windows(
   for (let i = 0; i < sentences.length; ) {
     let text = "";
     let j = i;
-    while (j < sentences.length && text.length < size) text += (text ? " " : "") + sentences[j++].text;
+    // `j === i` takes one sentence unconditionally. Without it a size that no
+    // sentence can reach leaves j at i, the step-back below cannot move either,
+    // and the loop spins forever on a book that looks perfectly ordinary.
+    while (j < sentences.length && (j === i || text.length < size)) {
+      text += (text ? " " : "") + sentences[j++].text;
+    }
     // Below this a "passage" is a stray heading or a caption fragment, which
     // ranks on nothing and reads as noise beside the real results.
     if (text.length > 60) out.push({ text, at: sentences[i].at, from: i, to: j });

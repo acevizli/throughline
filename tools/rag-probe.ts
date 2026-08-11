@@ -24,6 +24,13 @@ for (let i = 0; i < argv.length; i++) {
   }
   const name = argv[i].slice(2);
   const value = argv[++i];
+  // Every flag here takes a value. Left off, `--query` would embed an
+  // undefined and `--size` would become NaN, both of which fail much later
+  // and somewhere else.
+  if (value === undefined || value.startsWith("--")) {
+    console.error(`--${name} needs a value`);
+    process.exit(1);
+  }
   if (name === "query") QUERIES.push(value);
   else flags.set(name, value);
 }
