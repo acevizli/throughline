@@ -9,10 +9,12 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "ingest": "tsx src/cli.ts",
+    "passages": "tsx src/passages-cli.ts",
     "typecheck": "tsc",
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
-    "start": "next start"
+    "start": "next start -H 127.0.0.1",
+    "rag-probe": "tsx tools/rag-probe.ts"
   },
   "repository": {
     "type": "git",

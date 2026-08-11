@@ -82,7 +82,9 @@ export interface PageGeometry {
  *
  * Deliberately does not expose the pdf.js document: `fontName` is a load-order
  * dependent alias that must never escape the session that produced it, so font
- * resolution happens in here and only `PageDensity` comes out.
+ * resolution happens in here and only `PageDensity` and repaired `lines` come
+ * out. Both are taken from the same walk — the page text is read once and two
+ * things are made of it, because reading it is what costs.
  */
 export class Book {
   private constructor(
@@ -92,6 +94,7 @@ export class Book {
     readonly pageLabels: string[] | null,
     readonly outline: OutlineNode[],
     readonly density: PageDensity[],
+    private readonly pageLines: string[][],
     private readonly printedIndex: Map<string, number>,
   ) {}
 
@@ -103,19 +106,52 @@ export class Book {
     const outline = await flattenOutline(doc);
 
     const density: PageDensity[] = [{ prose: 0, code: 0 }]; // index 0 unused; pages are 1-based
+    const pageLines: string[][] = [[]];
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       const content = await page.getTextContent();
       let prose = 0;
       let code = 0;
+      const lines: string[] = [];
+      let buf = "";
+      let bufCode = 0;
+      let lastFont: string | null = null;
+
+      // Code listings are out of the passage corpus — Kobil's call, recorded on
+      // #21 — but the test is the line, not the item. An inline `null` in the
+      // middle of a sentence is set in the code font too, and dropping it
+      // leaves "an algorithm that always decides , no matter what was proposed".
+      const flush = () => {
+        const line = buf.trim();
+        if (line && bufCode * 2 <= line.length) lines.push(line);
+        buf = "";
+        bufCode = 0;
+        lastFont = null;
+      };
+
       for (const item of content.items as any[]) {
-        if (!item.str?.trim()) continue;
         // Resolved here and now: the alias is only meaningful within this load.
-        const family = content.styles?.[item.fontName]?.fontFamily;
-        if (family === "monospace") code += item.str.length;
-        else prose += item.str.length;
+        const family =
+          typeof item.str === "string" ? content.styles?.[item.fontName]?.fontFamily : undefined;
+
+        if (item.str?.trim()) {
+          if (family === "monospace") code += item.str.length;
+          else prose += item.str.length;
+        }
+
+        if (typeof item.str === "string" && item.str) {
+          buf += (welds(buf, item.str, lastFont, item.fontName) ? " " : "") + item.str;
+          if (family === "monospace") bufCode += item.str.length;
+          lastFont = item.fontName;
+        }
+        // pdf.js marks the end of a rendered line, on text items and on some
+        // that carry none; without it a page is one run-on string.
+        if (item.hasEOL) flush();
       }
+      flush();
+
       density[p] = { prose, code };
+      pageLines[p] = lines;
       page.cleanup();
     }
 
@@ -125,7 +161,24 @@ export class Book {
       if (!printedIndex.has(label)) printedIndex.set(label, i + 1);
     });
 
-    return new Book(path, doc.numPages, pageLabels, outline, density, printedIndex);
+    return new Book(path, doc.numPages, pageLabels, outline, density, pageLines, printedIndex);
+  }
+
+  /**
+   * One page's prose as rendered lines, code excluded and word breaks repaired.
+   *
+   * This is the raw material of a passage. What it is *not* is layout: nothing
+   * here knows a heading from a footnote, and #26 measured that retrieval does
+   * not need it to. What retrieval does need is that the words are words —
+   * see `welds`.
+   */
+  lines(page: number): string[] {
+    return this.pageLines[page] ?? [];
+  }
+
+  /** Printed page number as the book prints it, or null when it prints none. */
+  printedOf(page: number): string | null {
+    return this.pageLabels?.[page - 1] ?? null;
   }
 
   /**
@@ -308,6 +361,27 @@ export class Pages {
 }
 
 /**
+ * Whether a space has to be put back between two text items.
+ *
+ * pdf.js starts a new item wherever the font changes, and a change mid-word is
+ * how emphasis is set — so joining the items blind welds the words on either
+ * side of it together. DDIA's "as *fractal*" arrives as `as` + `fractal` and
+ * becomes `asfractal`, which no query will ever match.
+ *
+ * A font change is not on its own a word break, though: the punctuation closing
+ * an italic phrase is set in the roman font too, and spacing that would give
+ * `B-trees .`. So the split only counts as a word break when neither side is
+ * already spaced and neither side is the punctuation that hugs a word.
+ */
+const OPENS = /[([{'"‘“¿¡]$/;
+const CLOSES = /^[.,;:!?)\]}'"’”…%]/;
+
+function welds(buf: string, str: string, lastFont: string | null, font: string): boolean {
+  if (!buf || !lastFont || font === lastFont) return false;
+  return !/\s$/.test(buf) && !/^\s/.test(str) && !OPENS.test(buf) && !CLOSES.test(str);
+}
+
+/**
  * Whether a span has to be squeezed to the width the PDF drew it at.
  *
  * A substituted font almost never measures the same as the embedded one, so
@@ -331,7 +405,10 @@ async function flattenOutline(doc: any): Promise<OutlineNode[]> {
   const visit = async (items: any[], depth: number) => {
     for (const item of items) {
       const page = await resolveDestination(doc, item.dest);
-      if (page !== null) nodes.push({ title: item.title.trim(), page, depth });
+      // A bookmark keeps the line breaks the printed heading was set with —
+      // "Chapter 17. Orchestration-Driven\nService-Oriented Architecture" — and
+      // every one of them reaches a unit title and a passage breadcrumb.
+      if (page !== null) nodes.push({ title: item.title.replace(/\s+/g, " ").trim(), page, depth });
       if (item.items?.length) await visit(item.items, depth + 1);
     }
   };

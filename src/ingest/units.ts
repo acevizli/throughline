@@ -1,4 +1,4 @@
-import type { Chapter, Segment } from "./segments";
+import { NON_TEACHING, type Chapter, type Segment } from "./segments";
 
 /** A unit of study: one sitting, one coherent stretch of the book. */
 export interface Unit {
@@ -109,9 +109,6 @@ function build(group: Segment[], chapter: string, index: number, options: UnitOp
 }
 
 const PART_DIVIDER = /^part\b/i;
-
-const NON_TEACHING =
-  /^(contents?|table of contents|index|colophon|copyright|about the author|dedication|acknowledg|bibliograph|references?|further reading|glossary|preface|foreword)\b/i;
 
 function isTeachingMatter(s: Segment): boolean {
   if (NON_TEACHING.test(s.title)) return false;

@@ -3,6 +3,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Book, Pages } from "../src/pdf/book";
 import { chapters, segment } from "../src/ingest/segments";
+import { passages } from "../src/ingest/passages";
 import { KEYS, writeBrief, type Brief, type Key, type Question } from "../src/ingest/brief";
 import { nameUnits } from "../src/ingest/name";
 import { backend, MODEL, unready } from "../src/model/ask";
@@ -178,7 +179,61 @@ export async function add(
     );
   });
 
+  // Costs no reading — `Book.open` already walked every page, and this is what
+  // is made of what it read. A book whose passages fail still shelves as a
+  // course: retrieval is something extra to have while reading it, and losing
+  // that is not a reason to lose the book.
+  try {
+    storePassages(id, book);
+  } catch (error) {
+    console.warn(`passage extraction failed for ${title}:`, error);
+  }
+
   return { id };
+}
+
+/* ── passages ──────────────────────────────────────────────────── */
+
+/**
+ * Cut a book into passages and put them on the shelf beside its units.
+ *
+ * Replace rather than merge: a re-extraction with different settings must not
+ * leave last week's passages behind, and the ones whose text is unchanged keep
+ * their ids through it, so anything keyed to them survives.
+ */
+export function storePassages(bookId: string, book: Book): number {
+  const db = database();
+  const extracted = passages(book);
+
+  transaction(() => {
+    db.prepare("DELETE FROM passage WHERE book_id = ?").run(bookId);
+    const insert = db.prepare(
+      `INSERT INTO passage (book_id, id, ord, text, page_from, page_to,
+                            printed_from, printed_to, chapter, section)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const p of extracted.passages) {
+      insert.run(
+        bookId,
+        p.id,
+        p.ord,
+        p.text,
+        p.from,
+        p.to,
+        p.printedFrom,
+        p.printedTo,
+        p.chapter,
+        p.section,
+      );
+    }
+  });
+
+  return extracted.passages.length;
+}
+
+/** Whether a book is on the shelf at all — a passage row needs one to hang off. */
+export function shelved(bookId: string): boolean {
+  return database().prepare("SELECT 1 FROM book WHERE id = ?").get(bookId) !== undefined;
 }
 
 export function course(id: string): Course | null {
