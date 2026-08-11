@@ -12,11 +12,20 @@ import { passages, PASSAGE_DEFAULTS } from "./ingest/passages";
  * passages printed in full rather than counted.
  */
 const args = process.argv.slice(2);
-const flag = (name: string, fallback: number) => {
-  const at = args.indexOf(`--${name}`);
-  return at === -1 ? fallback : Number(args[at + 1]);
-};
-const [path] = args.filter((a) => !a.startsWith("--") && !isNumeric(a));
+const flags = new Map<string, string>();
+const positional: string[] = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i].startsWith("--")) flags.set(args[i].slice(2), args[i + 1] ?? "");
+  else if (!args[i - 1]?.startsWith("--")) positional.push(args[i]);
+}
+const flag = (name: string, fallback: number) => Number(flags.get(name) ?? fallback);
+
+const path = positional.find((a) => !isNumeric(a));
+// `npm run passages book.pdf --sample 10` silently eats the flag — npm claims
+// it as its own config and passes only the 10 along. Rather than depend on
+// everyone remembering the `--`, a bare number is the sample count, which is
+// how `npm run ingest` already takes its target minutes.
+const positionalSample = positional.find(isNumeric);
 
 if (!path) {
   console.error(
@@ -74,13 +83,16 @@ console.log(
 
 // Spread the sample across the book rather than taking the first few: the
 // opening pages of a chapter are the easiest text in it.
-const sample = flag("sample", 4);
+const sample = flag("sample", Number(positionalSample ?? 4));
 console.log(`\n  ── ${sample} passages, spread across the body ──`);
 for (let i = 0; i < sample; i++) {
   const p = report.passages[Math.floor(((i + 0.5) / sample) * report.passages.length)];
   if (!p) break;
   const range = p.from === p.to ? `p.${printed(p.from)}` : `pp.${printed(p.from)}–${printed(p.to)}`;
-  console.log(`\n  [${p.ord}] ${p.id}  ${range}  ${p.chapter}${p.section ? ` › ${p.section}` : ""}`);
+  // A chapter's opening pages sit in a segment named after the chapter, so the
+  // breadcrumb would otherwise read "Chapter 25 › Chapter 25".
+  const where = [p.chapter, p.section].filter((s, i, all) => s && all.indexOf(s) === i).join(" › ");
+  console.log(`\n  [${p.ord}] ${p.id}  ${range}  ${where}`);
   console.log(wrap(p.text, 92, "      "));
 }
 // Books shelved before passages existed have none, and re-adding the PDF would

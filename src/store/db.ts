@@ -123,6 +123,20 @@ const MIGRATIONS = [
 
   CREATE INDEX passage_order ON passage (book_id, ord);
   `,
+  `
+  -- A bookmark keeps the line breaks its printed heading was set with, and
+  -- those reached unit titles: "Chapter 17. Orchestration-Driven \n
+  -- Service-Oriented Architecture". Collapsed at the source now, but three rows
+  -- were already on the shelf. In \`covers\` the break is JSON-escaped, so it is
+  -- the two characters backslash-n rather than a newline.
+  UPDATE unit SET
+    title   = trim(replace(replace(replace(title,   char(13), ' '), char(10), ' '), '  ', ' ')),
+    chapter = trim(replace(replace(replace(chapter, char(13), ' '), char(10), ' '), '  ', ' ')),
+    covers  = replace(replace(covers, '\\n', ' '), '  ', ' ')
+  WHERE title   LIKE '%' || char(10) || '%' OR chapter LIKE '%' || char(10) || '%'
+     OR title   LIKE '%' || char(13) || '%' OR chapter LIKE '%' || char(13) || '%'
+     OR covers  LIKE '%\\n%';
+  `,
 ];
 
 let handle: DatabaseSync | null = null;

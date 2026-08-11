@@ -405,7 +405,10 @@ async function flattenOutline(doc: any): Promise<OutlineNode[]> {
   const visit = async (items: any[], depth: number) => {
     for (const item of items) {
       const page = await resolveDestination(doc, item.dest);
-      if (page !== null) nodes.push({ title: item.title.trim(), page, depth });
+      // A bookmark keeps the line breaks the printed heading was set with —
+      // "Chapter 17. Orchestration-Driven\nService-Oriented Architecture" — and
+      // every one of them reaches a unit title and a passage breadcrumb.
+      if (page !== null) nodes.push({ title: item.title.replace(/\s+/g, " ").trim(), page, depth });
       if (item.items?.length) await visit(item.items, depth + 1);
     }
   };
