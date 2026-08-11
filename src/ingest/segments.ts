@@ -29,7 +29,15 @@ export interface Chapter {
  * "Chapter 1. Reliable…", Clean Code writes "Chapter 1: Clean Code" — and some
  * books don't say "chapter" at all, which is what the depth fallback is for.
  */
-const CHAPTER_TITLE = /^(chapter|part|appendix)\b|^\d+\s*[.:—-]\s+\S/i;
+export const CHAPTER_TITLE = /^(chapter|part|appendix)\b|^\d+\s*[.:—-]\s+\S/i;
+
+/**
+ * Titles that are not the book teaching you anything: the apparatus around the
+ * text. Used two ways — to drop a segment from the syllabus, and to find where
+ * a book's body stops so the passage corpus can stop with it.
+ */
+export const NON_TEACHING =
+  /^(contents?|table of contents|index|colophon|copyright|about the author|dedication|acknowledg|bibliograph|references?|further reading|glossary|preface|foreword)\b/i;
 
 export function segment(book: Book): Segment[] {
   const nodes = dedupeByPage(book.outline);

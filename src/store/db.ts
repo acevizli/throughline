@@ -96,6 +96,33 @@ const MIGRATIONS = [
   -- dropped by validation (0). The first is regenerated; the second is not.
   ALTER TABLE brief ADD COLUMN questions INTEGER NOT NULL DEFAULT -1;
   `,
+  `
+  -- The book cut into passages: what retrieval ranks, and the author's own
+  -- words rather than anything written about them.
+  --
+  -- The id is the text's hash rather than its position, so re-extracting a book
+  -- leaves untouched passages with the ids they had. #23's embedding pass takes
+  -- ~40 minutes and resumes by looking for passages with no vector; ordinal ids
+  -- would survive a restart but not a re-extraction, quietly leaving every
+  -- vector attached to text it was not made from.
+  CREATE TABLE passage (
+    book_id      TEXT NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+    id           TEXT NOT NULL,
+    ord          INTEGER NOT NULL,
+    text         TEXT NOT NULL,
+    page_from    INTEGER NOT NULL,
+    page_to      INTEGER NOT NULL,
+    -- Printed pages are what a citation says out loud. NULL on a book with no
+    -- /PageLabels, where only the PDF index exists.
+    printed_from TEXT,
+    printed_to   TEXT,
+    chapter      TEXT NOT NULL,
+    section      TEXT NOT NULL,
+    PRIMARY KEY (book_id, id)
+  );
+
+  CREATE INDEX passage_order ON passage (book_id, ord);
+  `,
 ];
 
 let handle: DatabaseSync | null = null;
