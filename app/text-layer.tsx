@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { PageGeometry, PageLink } from "../src/pdf/book";
+import { cite, type Labels } from "../lib/printed";
 
 /**
  * A selectable text layer laid over a rendered page.
@@ -18,11 +19,14 @@ import type { PageGeometry, PageLink } from "../src/pdf/book";
 export function TextLayer({
   book,
   page,
+  printed,
   width,
   onFollow,
 }: {
   book: string;
   page: number;
+  /** The book's own page numbers — a link's tooltip says where it goes. */
+  printed: Labels;
   /** The rendered width of the page image, in CSS pixels. */
   width: number;
   /** A link inside the book was clicked, with the page it points at. */
@@ -116,7 +120,9 @@ export function TextLayer({
           // These anchors have no text — they are boxes over the page's own
           // words — so without this they reach a keyboard or a screen reader
           // as an unnamed link. Doubles as a tooltip saying where it goes.
-          title={link.url ?? `page ${link.page}`}
+          title={
+            link.url ?? (link.page === null ? undefined : `goes to ${cite(printed, link.page)}`)
+          }
           onClick={(event) => {
             if (link.url || link.page === null) return;
             event.preventDefault();

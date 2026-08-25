@@ -9,6 +9,7 @@ import { nameUnits } from "../src/ingest/name";
 import { backend, MODEL, unready } from "../src/model/ask";
 import { DEFAULTS, toUnits, type Unit } from "../src/ingest/units";
 import { database, SHELF, transaction } from "../src/store/db";
+import type { Labels } from "./printed";
 
 /** One book on the shelf, with enough progress to render its card. */
 export interface ShelfBook {
@@ -39,6 +40,8 @@ export interface Course {
   title: string;
   pageCount: number;
   hasPageLabels: boolean;
+  /** The book's own printed page numbers, for every number the reader is shown. */
+  printed: Labels;
   outlineNodes: number;
   lastUnit: string | null;
   units: CourseUnit[];
@@ -138,18 +141,23 @@ export async function add(
     }
   }
 
+  // A dictionary that doesn't cover the book is not a mapping — see `Pages.labels`.
+  // The flag and the array are decided together so they can never disagree.
+  const labels = book.pageLabels?.length === book.pageCount ? book.pageLabels : null;
+
   const now = new Date().toISOString();
   transaction(() => {
     db.prepare(
-      `INSERT INTO book (id, title, file, page_count, has_page_labels, outline_nodes,
-                         target_minutes, named, added_at, opened_at, last_unit)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      `INSERT INTO book (id, title, file, page_count, has_page_labels, page_labels,
+                         outline_nodes, target_minutes, named, added_at, opened_at, last_unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
     ).run(
       id,
       title,
       file,
       book.pageCount,
-      book.pageLabels ? 1 : 0,
+      labels ? 1 : 0,
+      labels ? JSON.stringify(labels) : null,
       book.outline.length,
       targetMinutes,
       named ? 1 : 0,
@@ -236,6 +244,32 @@ export function shelved(bookId: string): boolean {
   return database().prepare("SELECT 1 FROM book WHERE id = ?").get(bookId) !== undefined;
 }
 
+/**
+ * Fetch a book's page labels if it was shelved before they were stored.
+ *
+ * One reopen per book, ever: after it the column is written and this is a row
+ * read. `has_page_labels` is what says there is anything to fetch — a book with
+ * no `/PageLabels` has a NULL column too, and reopening it every time the shelf
+ * was browsed would be paying for an answer already known.
+ */
+export async function backfillLabels(id: string): Promise<void> {
+  const db = database();
+  const row = db
+    .prepare("SELECT has_page_labels, page_labels FROM book WHERE id = ?")
+    .get(id) as { has_page_labels: number; page_labels: string | null } | undefined;
+  if (!row || row.page_labels !== null || row.has_page_labels !== 1) return;
+
+  const opening = pages(id);
+  if (!opening) return;
+
+  const labels = await (await opening).labels();
+  db.prepare("UPDATE book SET has_page_labels = ?, page_labels = ? WHERE id = ?").run(
+    labels ? 1 : 0,
+    labels ? JSON.stringify(labels) : null,
+    id,
+  );
+}
+
 export function course(id: string): Course | null {
   const db = database();
   const book = db.prepare("SELECT * FROM book WHERE id = ?").get(id) as any;
@@ -256,6 +290,7 @@ export function course(id: string): Course | null {
     title: book.title,
     pageCount: book.page_count,
     hasPageLabels: book.has_page_labels === 1,
+    printed: book.page_labels ? (JSON.parse(book.page_labels) as string[]) : null,
     outlineNodes: book.outline_nodes,
     lastUnit: book.last_unit,
     units: rows.map((r) => ({

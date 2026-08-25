@@ -137,6 +137,16 @@ const MIGRATIONS = [
      OR title   LIKE '%' || char(13) || '%' OR chapter LIKE '%' || char(13) || '%'
      OR covers  LIKE '%\\n%';
   `,
+  `
+  -- The book's own /PageLabels, as a JSON array indexed by PDF page minus one.
+  -- Every page number the reader is shown is one of these; the sheet numbers
+  -- everything else counts in are 22 pages off DDIA's folios.
+  --
+  -- NULL means two different things, and \`has_page_labels\` tells them apart: a
+  -- book shelved before this column existed has labels to fetch and hasn't been
+  -- reopened yet, while a book with no /PageLabels has none to fetch ever.
+  ALTER TABLE book ADD COLUMN page_labels TEXT;
+  `,
 ];
 
 let handle: DatabaseSync | null = null;
@@ -153,7 +163,14 @@ export function database(): DatabaseSync {
     user_version: number;
   };
   for (let v = Number(applied); v < MIGRATIONS.length; v++) db.exec(MIGRATIONS[v]);
-  db.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
+  // Only ever forwards. A `tsx` script and a running `next dev` share this file,
+  // and stamping unconditionally let whichever process held the *older* copy of
+  // this array write its length back over a newer one — after which the newer
+  // process re-ran a migration that had already been applied, failed on
+  // `duplicate column name`, and kept failing on every request until restart.
+  if (MIGRATIONS.length > Number(applied)) {
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
+  }
 
   handle = db;
   return db;

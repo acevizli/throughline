@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskedQuestion, Course, CourseUnit, Marked, Quiz, ShelfBook } from "../lib/library";
 import type { Key } from "../src/ingest/brief";
+import { caption, cite, citeRange, type Labels } from "../lib/printed";
 import { TextLayer } from "./text-layer";
 
 /** Zoom is a multiplier over fit-width, so 1 is "the page fills its column". */
@@ -257,6 +258,7 @@ export default function Home() {
       <Reader
         book={course.id}
         unit={course.units[current]}
+        printed={course.printed}
         zoom={zoom}
         onZoom={setZoom}
         focus={focus}
@@ -276,6 +278,7 @@ export default function Home() {
           key={quizzing}
           book={course.id}
           unit={course.units.find((u) => u.id === quizzing)!}
+          printed={course.printed}
           onClose={() => setQuizzing(null)}
           onJump={jump}
           onMarked={(recall) =>
@@ -471,7 +474,9 @@ function Sidebar({
                 </span>
               </button>
             </div>
-            {i === current && <Briefing key={unit.id} book={course.id} unit={unit} />}
+            {i === current && (
+              <Briefing key={unit.id} book={course.id} unit={unit} printed={course.printed} />
+            )}
           </div>
         );
       })}
@@ -485,7 +490,7 @@ function Sidebar({
  * It lives in the roadmap rather than above the pages because it is read on the
  * way into the unit and not during it: the right-hand pane belongs to the book.
  */
-function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
+function Briefing({ book, unit, printed }: { book: string; unit: CourseUnit; printed: Labels }) {
   const [brief, setBrief] = useState<
     { primer: string; objectives: string[] } | { error: string } | null
   >(null);
@@ -506,8 +511,8 @@ function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
   if (!brief) {
     return (
       <div className="brief working">
-        Reading pp. {unit.from}–{unit.to}, writing the briefing and setting this unit's
-        questions. About a minute — paid once, then it's on disk.
+        Reading {citeRange(printed, unit.from, unit.to)}, writing the briefing and setting this
+        unit's questions. About a minute — paid once, then it's on disk.
       </div>
     );
   }
@@ -563,12 +568,14 @@ const points = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 function Questions({
   book,
   unit,
+  printed,
   onClose,
   onJump,
   onMarked,
 }: {
   book: string;
   unit: CourseUnit;
+  printed: Labels;
   onClose: () => void;
   onJump: (page: number) => void;
   onMarked: (recall: { score: number; outOf: number }) => void;
@@ -639,7 +646,7 @@ function Questions({
             <div className="quizsub">
               {quiz?.state === "marked"
                 ? `${points(quiz.result.score)} of ${quiz.result.outOf}`
-                : `pp. ${unit.from}–${unit.to} · book closed`}
+                : `${citeRange(printed, unit.from, unit.to)} · book closed`}
             </div>
           </div>
           <button className="ghost" onClick={onClose}>
@@ -696,8 +703,10 @@ function Questions({
                     >
                       <span className="qbox">{option.picked ? "■" : "□"}</span>
                       <span className="qtext">{option.text}</span>
+                      {/* The page is stored as a PDF index, because that is what
+                          the jump needs; what it is *called* is the book's own. */}
                       <button className="anchor" onClick={() => onJump(option.page)}>
-                        p.{option.page}
+                        {cite(printed, option.page)}
                       </button>
                     </div>
                   );
@@ -763,6 +772,7 @@ function Asked({
 function Reader({
   book,
   unit,
+  printed,
   zoom,
   onZoom,
   focus,
@@ -777,6 +787,7 @@ function Reader({
 }: {
   book: string;
   unit: CourseUnit;
+  printed: Labels;
   zoom: number;
   onZoom: (update: (z: number) => number) => void;
   focus: boolean;
@@ -853,7 +864,7 @@ function Reader({
         <div className="readerbar">
           <h1>{unit.title}</h1>
           <span className="range">
-            pp. {unit.from}–{unit.to} · {unit.minutes} min
+            {citeRange(printed, unit.from, unit.to)} · {unit.minutes} min
           </span>
           <span className="hud-sep" />
           <button
@@ -893,14 +904,22 @@ function Reader({
               {/* Server-rendered PNG — see Pages.render for why not client-side pdf.js. */}
               <img
                 src={`/api/page?book=${book}&page=${page}&scale=${scale}`}
-                alt={`page ${page}`}
+                alt={`page ${caption(printed, page)}`}
                 loading="lazy"
               />
               {/* …and the words themselves on top of it, so the picture of a
                   page is a page again. See Pages.geometry. */}
-              <TextLayer book={book} page={page} width={width} onFollow={onFollow} />
+              <TextLayer
+                book={book}
+                page={page}
+                printed={printed}
+                width={width}
+                onFollow={onFollow}
+              />
             </div>
-            <figcaption className="pagenum">{page}</figcaption>
+            {/* The folio the book prints, so it agrees with the page above it.
+                Bare on a book with none: this counts sheets, it doesn't cite. */}
+            <figcaption className="pagenum">{caption(printed, page)}</figcaption>
           </figure>
         ))}
       </div>
@@ -916,9 +935,7 @@ function Reader({
             ‹
           </button>
           <span className="hud-title">{unit.title}</span>
-          <span className="hud-meta">
-            pp. {unit.from}–{unit.to}
-          </span>
+          <span className="hud-meta">{citeRange(printed, unit.from, unit.to)}</span>
           <button
             className="ghost"
             onClick={() => onStep(1)}

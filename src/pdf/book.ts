@@ -228,6 +228,20 @@ export class Pages {
   }
 
   /**
+   * The book's own page labels, or null when it carries no `/PageLabels`.
+   *
+   * The same array `Book.open` reads at ingest, available to a book that was
+   * shelved before the column existed. Reading it costs nothing beyond the open
+   * — the labels come off the catalog, not off the pages.
+   */
+  async labels(): Promise<string[] | null> {
+    const labels = (await this.doc.getPageLabels()) as string[] | null;
+    // A dictionary that doesn't cover the book isn't a mapping. Nothing has
+    // ever produced one, but half an array would silently mis-cite the rest.
+    return labels?.length === this.pageCount ? labels : null;
+  }
+
+  /**
    * The text of a page range, as close to reading order as pdf.js gives it,
    * with every page preceded by a `[[page N]]` marker.
    *
