@@ -338,6 +338,40 @@ button {
   background: rgb(120 160 255 / 0.4);
 }
 
+/* Copy a whole code listing. Sits on the listing's top-right corner, above
+   the text and the links, and stays quiet until the listing is pointed at. */
+.copylisting {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-100%, 4px);
+  padding: 2px 8px;
+  font: 500 12px/1.4 system-ui, sans-serif;
+  color: #444;
+  background: rgb(255 255 255 / 0.92);
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 120ms;
+}
+
+.copylisting:hover,
+.copylisting:focus-visible,
+.copylisting[data-state="copied"],
+.copylisting[data-state="failed"] {
+  opacity: 1;
+}
+
+.copylisting[data-state="copied"] {
+  color: #1a7f37;
+  border-color: #1a7f37;
+}
+
+.copylisting[data-state="failed"] {
+  color: #b42318;
+  border-color: #b42318;
+}
+
 /* The book's own cross-references. Above the text so they stay clickable,
    invisible until pointed at so the page still looks like the page. */
 .pagelink {

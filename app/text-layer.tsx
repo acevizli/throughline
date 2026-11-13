@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { PageGeometry, PageLink } from "../src/pdf/book";
+import type { CodeBlock, PageGeometry, PageLink } from "../src/pdf/book";
+import { cite, type Labels } from "../lib/printed";
 
 /**
  * A selectable text layer laid over a rendered page.
@@ -18,11 +19,14 @@ import type { PageGeometry, PageLink } from "../src/pdf/book";
 export function TextLayer({
   book,
   page,
+  printed,
   width,
   onFollow,
 }: {
   book: string;
   page: number;
+  /** The book's own page numbers — a link's tooltip says where it goes. */
+  printed: Labels;
   /** The rendered width of the page image, in CSS pixels. */
   width: number;
   /** A link inside the book was clicked, with the page it points at. */
@@ -48,7 +52,7 @@ export function TextLayer({
   useEffect(() => {
     if (!near) return;
     let live = true;
-    fetch(`/api/text?book=${book}&page=${page}`)
+    fetch(`/api/text?book=${book}&page=${page}&v=${GEOMETRY_VERSION}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((geometry: PageGeometry) => {
         if (!live) return;
@@ -116,7 +120,9 @@ export function TextLayer({
           // These anchors have no text — they are boxes over the page's own
           // words — so without this they reach a keyboard or a screen reader
           // as an unnamed link. Doubles as a tooltip saying where it goes.
-          title={link.url ?? `page ${link.page}`}
+          title={
+            link.url ?? (link.page === null ? undefined : `goes to ${cite(printed, link.page)}`)
+          }
           onClick={(event) => {
             if (link.url || link.page === null) return;
             event.preventDefault();
@@ -130,9 +136,50 @@ export function TextLayer({
           }}
         />
       ))}
+
+      {laid?.code.map((block, i) => <CopyListing key={`code-${i}`} block={block} />)}
     </div>
   );
 }
+
+/**
+ * Copies one code listing whole: the book's own characters, with the
+ * line-number gutter taken off, wrapped lines put back together, and the
+ * part on the next page included. See `CodeBlock`.
+ */
+function CopyListing({ block }: { block: CodeBlock }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (state === "idle") return;
+    const reset = setTimeout(() => setState("idle"), 1500);
+    return () => clearTimeout(reset);
+  }, [state]);
+
+  return (
+    <button
+      type="button"
+      className="copylisting"
+      data-state={state}
+      title="Copy this listing"
+      style={{ left: `${block.right * 100}%`, top: `${block.top * 100}%` }}
+      onClick={() =>
+        navigator.clipboard.writeText(block.text).then(
+          () => setState("copied"),
+          () => setState("failed"),
+        )
+      }
+    >
+      {state === "copied" ? "Copied" : state === "failed" ? "Couldn't copy" : "Copy"}
+    </button>
+  );
+}
+
+/**
+ * Bumped whenever the geometry gains a field. `/api/text` is cached as
+ * immutable, so without it a page read before the change would keep its old
+ * geometry (no copy buttons) for a year.
+ */
+const GEOMETRY_VERSION = 2;
 
 /* ── laying the spans out ──────────────────────────────────────── */
 
@@ -156,6 +203,7 @@ interface Laid {
   floor: number;
   spans: LaidSpan[];
   links: PageLink[];
+  code: CodeBlock[];
 }
 
 /**
@@ -173,6 +221,7 @@ function lay(geometry: PageGeometry): Laid {
     width: geometry.width,
     floor: floor(),
     links: geometry.links,
+    code: geometry.code ?? [],
     spans: geometry.spans.map((span) => {
       const ascent = span.height * ascentOf(span.family);
       const left = span.angle === 0 ? span.x : span.x + ascent * Math.sin(span.angle);

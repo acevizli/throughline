@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskedQuestion, Course, CourseUnit, Marked, Quiz, ShelfBook } from "../lib/library";
 import type { Key } from "../src/ingest/brief";
+import { caption, cite, citeRange, type Labels } from "../lib/printed";
 import { TextLayer } from "./text-layer";
 
 /** Zoom is a multiplier over fit-width, so 1 is "the page fills its column". */
@@ -38,30 +39,111 @@ export default function Home() {
     loadShelf();
   }, [loadShelf]);
 
+  /** The page at the top of the reading pane, as the reader last reported it. */
+  const [page, setPage] = useState<number | null>(null);
+
+  /**
+   * A page to put back at the top of the pane on opening, held there until
+   * the reader takes over — see the effect that honours it.
+   */
+  const [restore, setRestore] = useState<number | null>(null);
+
   const open = useCallback(async (id: string) => {
-    const found: Course = await fetch(`/api/book?id=${id}`).then((r) => r.json());
+    const response = await fetch(`/api/book?id=${id}`);
+    if (!response.ok) {
+      // A book named in the URL that has since left the shelf: show the shelf.
+      window.history.replaceState(null, "", window.location.pathname);
+      return;
+    }
+    const found: Course = await response.json();
     const at = found.units.findIndex((u) => u.id === found.lastUnit);
+    const unit = found.units[at === -1 ? 0 : at];
     setCourse(found);
     setCurrent(at === -1 ? 0 : at);
     setFocus(false);
+    setPage(null);
+    setRestore(
+      found.lastPage !== null && unit && found.lastPage >= unit.from && found.lastPage <= unit.to
+        ? found.lastPage
+        : null,
+    );
+    // The open book rides in the URL so a refresh reopens it. The page doesn't:
+    // the database already has it, and the URL would have to pick between the
+    // sheet the system counts and the folio the book prints.
+    window.history.replaceState(null, "", `?book=${id}`);
   }, []);
+
+  // A refresh lands back in the book the URL names, rather than on the shelf.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("book");
+    if (id) open(id);
+  }, [open]);
 
   const close = useCallback(() => {
     setCourse(null);
+    setRestore(null);
+    window.history.replaceState(null, "", window.location.pathname);
     loadShelf();
   }, [loadShelf]);
 
-  // Keep the place, so the shelf can offer to resume. Fire-and-forget: losing
-  // one of these costs a scroll, not a re-ingest.
+  // Keep the place — unit and page — so a refresh or the shelf can resume
+  // there. Fire-and-forget: losing one of these costs a scroll, not a
+  // re-ingest. `keepalive` lets the last one out survive the refresh that
+  // prompted it.
   useEffect(() => {
     const unit = course?.units[current];
-    if (!course || !unit) return;
+    if (!course || !unit || page === null) return;
+    // Between a unit change and the reader's next report, `page` still names a
+    // sheet in the unit just left; saving that pair would resume nowhere.
+    if (page < unit.from || page > unit.to) return;
+    // While a restore is still landing, the only page worth saving is the
+    // restored one — the unit's first page passes through on the way.
+    if (restore !== null && page !== restore) return;
     fetch("/api/progress", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ book: course.id, unit: unit.id }),
+      body: JSON.stringify({ book: course.id, unit: unit.id, page }),
+      keepalive: true,
     }).catch(() => {});
-  }, [course, current]);
+  }, [course, current, page, restore]);
+
+  /**
+   * Put the restored page at the top of the pane, and keep it there until the
+   * reader moves.
+   *
+   * One scroll isn't enough. Every page frame takes its height from
+   * `--page-aspect`, which on a fresh load is the US Letter fallback until the
+   * first page's geometry arrives — so twenty pages in, a 7×9.19 book slides
+   * the target a few hundred pixels down the moment it does. Re-aim whenever
+   * the pages change size, and let go at the first sign of the reader's own
+   * hand, or after a few seconds, whichever comes first.
+   */
+  useEffect(() => {
+    if (restore === null) return;
+    const aim = () =>
+      document.getElementById(`page-${restore}`)?.scrollIntoView({ behavior: "instant", block: "start" });
+    aim();
+
+    const pages = document.querySelector(".pages");
+    const observer = new ResizeObserver(aim);
+    if (pages) observer.observe(pages);
+
+    const release = () => setRestore(null);
+    const timer = setTimeout(release, 4000);
+    const hands = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const event of hands) window.addEventListener(event, release, { passive: true });
+    // Anything that scrolls the pane off the page — a scrollbar drag, a link,
+    // a script — means the reader has moved on, whatever moved them.
+    const pane = document.querySelector(".reader");
+    const moved = () => topPage() !== restore && release();
+    pane?.addEventListener("scroll", moved, { passive: true });
+    return () => {
+      observer.disconnect();
+      clearTimeout(timer);
+      for (const event of hands) window.removeEventListener(event, release);
+      pane?.removeEventListener("scroll", moved);
+    };
+  }, [restore]);
 
   // Which unit's questions are on screen. Ticking a unit off opens them: the
   // questions are the other half of finishing a unit, and burying them behind a
@@ -257,6 +339,7 @@ export default function Home() {
       <Reader
         book={course.id}
         unit={course.units[current]}
+        printed={course.printed}
         zoom={zoom}
         onZoom={setZoom}
         focus={focus}
@@ -268,6 +351,7 @@ export default function Home() {
         onDone={(done) => setDone(current, done)}
         onQuiz={() => setQuizzing(course.units[current].id)}
         onFollow={jump}
+        onPage={setPage}
         back={origin?.to === current ? course.units[origin.from].title : null}
         onUnjump={unjump}
       />
@@ -276,6 +360,7 @@ export default function Home() {
           key={quizzing}
           book={course.id}
           unit={course.units.find((u) => u.id === quizzing)!}
+          printed={course.printed}
           onClose={() => setQuizzing(null)}
           onJump={jump}
           onMarked={(recall) =>
@@ -471,7 +556,9 @@ function Sidebar({
                 </span>
               </button>
             </div>
-            {i === current && <Briefing key={unit.id} book={course.id} unit={unit} />}
+            {i === current && (
+              <Briefing key={unit.id} book={course.id} unit={unit} printed={course.printed} />
+            )}
           </div>
         );
       })}
@@ -485,7 +572,7 @@ function Sidebar({
  * It lives in the roadmap rather than above the pages because it is read on the
  * way into the unit and not during it: the right-hand pane belongs to the book.
  */
-function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
+function Briefing({ book, unit, printed }: { book: string; unit: CourseUnit; printed: Labels }) {
   const [brief, setBrief] = useState<
     { primer: string; objectives: string[] } | { error: string } | null
   >(null);
@@ -506,8 +593,8 @@ function Briefing({ book, unit }: { book: string; unit: CourseUnit }) {
   if (!brief) {
     return (
       <div className="brief working">
-        Reading pp. {unit.from}–{unit.to}, writing the briefing and setting this unit's
-        questions. About a minute — paid once, then it's on disk.
+        Reading {citeRange(printed, unit.from, unit.to)}, writing the briefing and setting this
+        unit's questions. About a minute — paid once, then it's on disk.
       </div>
     );
   }
@@ -563,12 +650,14 @@ const points = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 function Questions({
   book,
   unit,
+  printed,
   onClose,
   onJump,
   onMarked,
 }: {
   book: string;
   unit: CourseUnit;
+  printed: Labels;
   onClose: () => void;
   onJump: (page: number) => void;
   onMarked: (recall: { score: number; outOf: number }) => void;
@@ -639,7 +728,7 @@ function Questions({
             <div className="quizsub">
               {quiz?.state === "marked"
                 ? `${points(quiz.result.score)} of ${quiz.result.outOf}`
-                : `pp. ${unit.from}–${unit.to} · book closed`}
+                : `${citeRange(printed, unit.from, unit.to)} · book closed`}
             </div>
           </div>
           <button className="ghost" onClick={onClose}>
@@ -696,8 +785,10 @@ function Questions({
                     >
                       <span className="qbox">{option.picked ? "■" : "□"}</span>
                       <span className="qtext">{option.text}</span>
+                      {/* The page is stored as a PDF index, because that is what
+                          the jump needs; what it is *called* is the book's own. */}
                       <button className="anchor" onClick={() => onJump(option.page)}>
-                        p.{option.page}
+                        {cite(printed, option.page)}
                       </button>
                     </div>
                   );
@@ -763,6 +854,7 @@ function Asked({
 function Reader({
   book,
   unit,
+  printed,
   zoom,
   onZoom,
   focus,
@@ -772,11 +864,13 @@ function Reader({
   onDone,
   onQuiz,
   onFollow,
+  onPage,
   back,
   onUnjump,
 }: {
   book: string;
   unit: CourseUnit;
+  printed: Labels;
   zoom: number;
   onZoom: (update: (z: number) => number) => void;
   focus: boolean;
@@ -786,6 +880,8 @@ function Reader({
   onDone: (done: boolean) => void;
   onQuiz: () => void;
   onFollow: (page: number) => void;
+  /** Which page is at the top of the pane, whenever that changes. */
+  onPage: (page: number) => void;
   /** The unit a followed link took you out of, while you're still away from it. */
   back: string | null;
   onUnjump: () => void;
@@ -794,9 +890,32 @@ function Reader({
   const [column, setColumn] = useState(760);
 
   // A new unit means a new stretch of the book — start at its first page.
+  // Reported straight away: scrolling to where you already are fires no event.
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [unit.id]);
+    const top = topPage();
+    if (top !== null) onPage(top);
+  }, [unit.id, onPage]);
+
+  // …and whichever page scrolling brings to the top, at most once a frame.
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const top = topPage();
+        if (top !== null) onPage(top);
+      });
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      element.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [onPage]);
 
   // Zoom 1 means "as wide as the pane allows, up to a comfortable measure", so
   // the multiplier has to be applied to a measured width rather than a constant.
@@ -853,7 +972,7 @@ function Reader({
         <div className="readerbar">
           <h1>{unit.title}</h1>
           <span className="range">
-            pp. {unit.from}–{unit.to} · {unit.minutes} min
+            {citeRange(printed, unit.from, unit.to)} · {unit.minutes} min
           </span>
           <span className="hud-sep" />
           <button
@@ -893,14 +1012,22 @@ function Reader({
               {/* Server-rendered PNG — see Pages.render for why not client-side pdf.js. */}
               <img
                 src={`/api/page?book=${book}&page=${page}&scale=${scale}`}
-                alt={`page ${page}`}
+                alt={`page ${caption(printed, page)}`}
                 loading="lazy"
               />
               {/* …and the words themselves on top of it, so the picture of a
                   page is a page again. See Pages.geometry. */}
-              <TextLayer book={book} page={page} width={width} onFollow={onFollow} />
+              <TextLayer
+                book={book}
+                page={page}
+                printed={printed}
+                width={width}
+                onFollow={onFollow}
+              />
             </div>
-            <figcaption className="pagenum">{page}</figcaption>
+            {/* The folio the book prints, so it agrees with the page above it.
+                Bare on a book with none: this counts sheets, it doesn't cite. */}
+            <figcaption className="pagenum">{caption(printed, page)}</figcaption>
           </figure>
         ))}
       </div>
@@ -916,9 +1043,7 @@ function Reader({
             ‹
           </button>
           <span className="hud-title">{unit.title}</span>
-          <span className="hud-meta">
-            pp. {unit.from}–{unit.to}
-          </span>
+          <span className="hud-meta">{citeRange(printed, unit.from, unit.to)}</span>
           <button
             className="ghost"
             onClick={() => onStep(1)}
