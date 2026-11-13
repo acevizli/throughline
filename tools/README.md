@@ -98,3 +98,42 @@ and won. The repairs are the part that matters, and all four are visible in the 
 | break hyphens, measured per book | `imple‐ mentation` → `implementation`, without turning `safety-critical` into `safetycritical` |
 | running heads and feet | the chapter title landing mid-sentence |
 | code listings dropped by line, not by item | keeps inline `null` inside the sentence it belongs to |
+
+## `npm run site` — a tutorial website printed as a book
+
+Some courses are websites, not PDFs: chapters of lessons, one page each. Everything in
+throughline counts in PDF pages, so instead of teaching the engine a second coordinate
+system, this prints the site into a PDF the ingest already reads
+([#30](https://github.com/acevizli/throughline/issues/30)). Then add it to the shelf with
+"Open a book".
+
+```bash
+npm run site -- <index-url>                      # the page that lists every lesson
+npm run site -- <index-url> --chapters 1,2       # a quick look at the first two chapters
+npm run site -- <index-url> --skip deprecated    # drop chapters whose heading matches
+npm run site -- <index-url> --out ~/Desktop/x.pdf
+```
+
+**Nothing in it knows about any one site.** It reads a site the way ingest reads a book:
+
+| | how it's found |
+|---|---|
+| lessons | the largest family of same-site links sharing a URL directory |
+| table of contents | the smallest element holding all of them |
+| chapter headings | text in that table that sits in no lesson's row |
+| a lesson's text | Mozilla Readability's article, after showing content hidden behind a toggle (quiz solutions) and removing script-only links and buttons (the toggles themselves) |
+| how it looks | the site's own classes and stylesheets, inside the same chain of elements the article sat in, so scoped rules (`#main pre…`) still match. Ours go last and take over page size, type size, wrapping and page breaks |
+| listings | coloured at print time with Prism, in the language the page declares (`language-*` / `lang-*`), because sites colour code with a script that never runs here. The site's own Prism theme applies when it has one. Line numbers only where the page asks with `line-numbers`, and carried by each line rather than drawn as a separate gutter column, so they can't drift from their lines across a page break and a wrapped line keeps one number. The text inside a `<pre>` is never changed |
+| lesson number | the `1.4` a title starts with, if it has one; otherwise its position |
+
+Nothing is written by the tool, so the no-drift rule holds: the page images *are* the
+site's text. What it adds is structure the site already states: a divider page per chapter
+(short enough to fall under the 200-character floor, so it opens a chapter without becoming
+a segment), a two-level bookmark outline, and `/PageLabels` like `1.4·2`. The same string is
+printed in each page's footer, so a quiz citation always matches the number on the page.
+
+Fetching is temporary scaffolding, not part of the project. Pages are cached under
+`$TMPDIR/throughline-sites/<host>/`, one request at a time with 1.5 s between them, and the
+PDF is written there too unless `--out` says otherwise. Nothing lands in the repo. The
+creation date is pinned to when the index was fetched, because books are identified by the
+sha256 of their bytes. Needs Google Chrome (or `CHROME=/path/to/chrome`).
