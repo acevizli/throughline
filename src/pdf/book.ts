@@ -75,6 +75,20 @@ export interface PageGeometry {
   height: number;
   spans: TextSpan[];
   links: PageLink[];
+  code: CodeBlock[];
+}
+
+/**
+ * A code listing on the page: where its copy button goes, and what it copies.
+ *
+ * `text` is the whole listing, not just this page's part of it. A listing that
+ * runs over a page break copies the same text from either half.
+ */
+export interface CodeBlock {
+  /** Fractions of the page box: the right edge and top of the listing, where the button sits. */
+  right: number;
+  top: number;
+  text: string;
 }
 
 /**
@@ -221,6 +235,9 @@ export class Pages {
     private readonly doc: any,
   ) {}
 
+  /** Each page's listings, read once: a listing's neighbours are read to join it across page breaks. */
+  private readonly listingCache = new Map<number, Promise<Listing[]>>();
+
   static async open(path: string): Promise<Pages> {
     const data = new Uint8Array(await readFile(path));
     const doc = await pdfjs.getDocument({ data, verbosity: 0 }).promise;
@@ -350,7 +367,71 @@ export class Pages {
     }
 
     pdfPage.cleanup();
-    return { width: pageWidth, height: pageHeight, spans, links };
+    return { width: pageWidth, height: pageHeight, spans, links, code: await this.code(page) };
+  }
+
+  /**
+   * The page's listings, each with the text of the whole listing it belongs to.
+   *
+   * A listing that opens the page may have started on the one before, and
+   * one that ends it may run on to the next. Both halves are joined when the
+   * pages agree: a gutter that keeps counting, or, for listings with no
+   * gutter, nothing but the running head and foot in between.
+   */
+  private async code(page: number): Promise<CodeBlock[]> {
+    const here = await this.listings(page);
+    return Promise.all(
+      here.map(async (listing) => {
+        const parts = [listing];
+        for (let p = page - 1, first = listing; first.opensPage && p >= 1; p--) {
+          const before = (await this.listings(p)).at(-1);
+          if (!before?.endsPage || !continues(before, first)) break;
+          parts.unshift(before);
+          first = before;
+        }
+        for (let p = page + 1, last = listing; last.endsPage && p <= this.pageCount; p++) {
+          const after = (await this.listings(p))[0];
+          if (!after?.opensPage || !continues(last, after)) break;
+          parts.push(after);
+          last = after;
+        }
+        return { right: listing.right, top: listing.top, text: listingText(parts) };
+      }),
+    );
+  }
+
+  private listings(page: number): Promise<Listing[]> {
+    let cached = this.listingCache.get(page);
+    if (!cached) {
+      cached = this.readListings(page);
+      this.listingCache.set(page, cached);
+    }
+    return cached;
+  }
+
+  private async readListings(page: number): Promise<Listing[]> {
+    const pdfPage = await this.doc.getPage(page);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const { pageWidth, pageHeight, pageX, pageY } = viewport.rawDims;
+    const flip = [1, 0, 0, -1, -pageX, pageY + pageHeight];
+    const content = await pdfPage.getTextContent();
+
+    const glyphs: Glyph[] = [];
+    for (const item of content.items as any[]) {
+      if (typeof item.str !== "string" || !item.str.trim()) continue;
+      const tx = pdfjs.Util.transform(flip, item.transform);
+      if (Math.abs(tx[1]) > 1e-3 || Math.abs(tx[2]) > 1e-3) continue; // rotated: not a listing
+      glyphs.push({
+        str: item.str,
+        x: tx[4],
+        y: tx[5],
+        width: item.width,
+        size: Math.hypot(tx[2], tx[3]),
+        mono: content.styles?.[item.fontName]?.fontFamily === "monospace",
+      });
+    }
+    pdfPage.cleanup();
+    return findListings(glyphs, pageWidth, pageHeight);
   }
 
   /**
@@ -372,6 +453,208 @@ export class Pages {
     pdfPage.cleanup();
     return canvas.toBuffer("image/png");
   }
+}
+
+/* ── code listings ─────────────────────────────────────────────── */
+
+interface Glyph {
+  str: string;
+  /** Baseline origin, PDF units, top-left origin. */
+  x: number;
+  y: number;
+  width: number;
+  size: number;
+  mono: boolean;
+}
+
+interface ListingLine {
+  /** The gutter's number for this line; null on a wrapped continuation, or with no gutter. */
+  number: number | null;
+  text: string;
+}
+
+interface Listing {
+  lines: ListingLine[];
+  numbered: boolean;
+  /** Nothing but the running head above it / the running foot below it. */
+  opensPage: boolean;
+  endsPage: boolean;
+  /** Fractions of the page box. */
+  right: number;
+  top: number;
+}
+
+/**
+ * The page's code listings, found from the text alone.
+ *
+ * A line is code when most of its characters are set in a monospace face,
+ * which is the test the passage corpus already uses to drop listings. An
+ * inline `nullptr` in a sentence doesn't make the sentence code. Consecutive
+ * code lines are one listing. A blank line inside a listing is a wider gap,
+ * not a break, so the gap allowed is generous; any prose line between two
+ * code lines does break it.
+ *
+ * A listing of one or two lines has to be (nearly) all code. A sentence
+ * that happens to be mostly monospace, such as a URL or a long identifier
+ * running over a line break, shouldn't get a copy button.
+ */
+function findListings(glyphs: Glyph[], pageWidth: number, pageHeight: number): Listing[] {
+  const rows = toRows(glyphs);
+  if (rows.length === 0) return [];
+
+  // A running head or foot doesn't count as content when deciding whether a
+  // listing opens or ends a page. It is the first or last line, out near
+  // the edge, and set apart from the text by a gap wider than any line
+  // spacing. A fixed band would be simpler, but margins differ by book, and a
+  // band wide enough for one cuts the first line of code off another.
+  let body = rows;
+  const apart = (a: Row, b: Row) => Math.abs(b.y - a.y) > Math.max(a.size, b.size) * 2.5;
+  if (body.length > 1 && body[0].y < pageHeight * 0.12 && apart(body[0], body[1])) body = body.slice(1);
+  const n = body.length;
+  if (n > 1 && body[n - 1].y > pageHeight * 0.88 && apart(body[n - 2], body[n - 1])) body = body.slice(0, -1);
+  const textRight = Math.max(...body.map((r) => r.right), 0);
+
+  const groups: Row[][] = [];
+  let current: Row[] = [];
+  for (const row of body) {
+    const last = current.at(-1);
+    if (row.code && last && row.y - last.y <= last.size * 3.2) current.push(row);
+    else {
+      if (current.length) groups.push(current);
+      current = row.code ? [row] : [];
+    }
+  }
+  if (current.length) groups.push(current);
+
+  return groups
+    .filter((g) => g.length > 2 || g.every((r) => r.share >= 0.9))
+    .flatMap((group) => {
+      const opensPage = body[0] === group[0];
+      const endsPage = body.at(-1) === group.at(-1);
+      const lines = rebuild(group, opensPage || endsPage);
+      if (!lines.lines.some((l) => l.text.trim())) return [];
+      const top = Math.min(...group.map((r) => r.y - r.size));
+      return [
+        {
+          ...lines,
+          opensPage,
+          endsPage,
+          right: Math.max(textRight, ...group.map((r) => r.right)) / pageWidth,
+          top: Math.max(0, top) / pageHeight,
+        },
+      ];
+    });
+}
+
+interface Row {
+  y: number;
+  size: number;
+  right: number;
+  /** Share of the row's characters that are monospace. */
+  share: number;
+  code: boolean;
+  glyphs: Glyph[];
+}
+
+/** Glyphs into rendered lines, top to bottom, each sorted left to right. */
+function toRows(glyphs: Glyph[]): Row[] {
+  const sorted = [...glyphs].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rows: Glyph[][] = [];
+  for (const g of sorted) {
+    const row = rows.at(-1);
+    if (row && Math.abs(row[0].y - g.y) < Math.min(row[0].size, g.size) * 0.5) row.push(g);
+    else rows.push([g]);
+  }
+  return rows.map((row) => {
+    row.sort((a, b) => a.x - b.x);
+    const chars = (g: Glyph) => g.str.replace(/\s/g, "").length;
+    const all = row.reduce((n, g) => n + chars(g), 0);
+    const mono = row.reduce((n, g) => n + (g.mono ? chars(g) : 0), 0);
+    const share = all ? mono / all : 0;
+    return {
+      y: row[0].y,
+      size: Math.max(...row.map((g) => g.size)),
+      right: Math.max(...row.map((g) => g.x + g.width)),
+      share,
+      code: share > 0.5,
+      glyphs: row,
+    };
+  });
+}
+
+/**
+ * A listing's lines as text, laid on a character grid.
+ *
+ * A monospace face puts every character one advance apart, so a glyph's
+ * column is its distance from the listing's left edge in advances. Spaces are
+ * put back from that, which keeps indentation however the PDF chose to split
+ * or space its spans.
+ *
+ * A gutter of line numbers is recognised and taken off. Most lines open with
+ * a number standing apart from the code, and the numbers count up. In a
+ * listing with a gutter, a line with no number is the line above it, wrapped
+ * by the print.
+ */
+function rebuild(group: Row[], atPageEdge: boolean): Pick<Listing, "lines" | "numbered"> {
+  const leading = group.map((row) => {
+    const [first, second] = row.glyphs;
+    const n = /^\d+$/.test(first.str.trim()) ? Number(first.str.trim()) : null;
+    // Standing apart: a gutter number is followed by a gap, not by more of the
+    // same token (`10` in `10 * x` is code).
+    const apart = n !== null && (!second || second.x - (first.x + first.width) > first.size * 0.4);
+    return apart ? n : null;
+  });
+  const numbers = leading.filter((n): n is number => n !== null);
+  // One number is too little to call a gutter, except at a page edge. There a
+  // page break can leave a single line of a numbered listing, and it has to
+  // be recognised to join the rest.
+  const numbered =
+    numbers.length >= Math.max(atPageEdge ? 1 : 2, group.length * 0.5) &&
+    numbers.every((n, i) => i === 0 || n === numbers[i - 1] + 1);
+
+  const code = group.map((row, i) => (numbered && leading[i] !== null ? row.glyphs.slice(1) : row.glyphs));
+  const advances = code
+    .flat()
+    .filter((g) => g.mono && g.str.length > 0)
+    .map((g) => g.width / g.str.length)
+    .sort((a, b) => a - b);
+  const advance = advances[Math.floor(advances.length / 2)] || group[0].size * 0.6;
+  const left = Math.min(...code.flat().map((g) => g.x), Infinity);
+
+  const lines = code.map((glyphs, i) => {
+    let text = "";
+    for (const g of glyphs) {
+      const column = Math.max(0, Math.round((g.x - left) / advance));
+      if (text.length < column) text += " ".repeat(column - text.length);
+      text += g.str;
+    }
+    return { number: numbered ? leading[i] : null, text: text.trimEnd() };
+  });
+  return { lines, numbered };
+}
+
+/** Whether `next`, at the top of its page, carries on `prev`, at the bottom of the one before. */
+function continues(prev: Listing, next: Listing): boolean {
+  if (prev.numbered !== next.numbered) return false;
+  if (!prev.numbered) return true;
+  const last = prev.lines.findLast((l) => l.number !== null)?.number;
+  const first = next.lines.find((l) => l.number !== null)?.number;
+  // The page may break inside a wrapped line, so `next` can open on a continuation.
+  return last != null && first === last + 1;
+}
+
+/** The pieces of one listing as the text a reader pastes. */
+function listingText(parts: Listing[]): string {
+  const out: string[] = [];
+  for (const part of parts) {
+    for (const line of part.lines) {
+      if (part.numbered && line.number === null && out.length > 0) {
+        // A wrap broke the line at a space and left it at the end of the row above.
+        out[out.length - 1] = `${out[out.length - 1].trimEnd()} ${line.text.trimStart()}`;
+      } else out.push(line.text);
+    }
+  }
+  return out.join("\n").replace(/\n+$/, "") + "\n";
 }
 
 /**
