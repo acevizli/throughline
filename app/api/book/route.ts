@@ -1,4 +1,4 @@
-import { backfillLabels, course, forget, setPlace } from "../../../lib/library";
+import { backfillLabels, course, forget, touch } from "../../../lib/library";
 
 export async function GET(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   if (!found) return new Response("no such book", { status: 404 });
 
   // Opening counts as reading: the shelf orders by it.
-  if (found.lastUnit) setPlace(id, found.lastUnit);
+  touch(id);
   return Response.json(found);
 }
 

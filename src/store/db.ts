@@ -147,6 +147,12 @@ const MIGRATIONS = [
   -- reopened yet, while a book with no /PageLabels has none to fetch ever.
   ALTER TABLE book ADD COLUMN page_labels TEXT;
   `,
+  `
+  -- The page that was at the top of the pane, so a refresh or a resume lands
+  -- where reading stopped rather than at the top of the unit. A PDF sheet like
+  -- every other page in the system; NULL until the reader has reported one.
+  ALTER TABLE book ADD COLUMN last_page INTEGER;
+  `,
 ];
 
 let handle: DatabaseSync | null = null;

@@ -44,6 +44,8 @@ export interface Course {
   printed: Labels;
   outlineNodes: number;
   lastUnit: string | null;
+  /** The sheet at the top of the pane when reading stopped, inside `lastUnit`. */
+  lastPage: number | null;
   units: CourseUnit[];
 }
 
@@ -293,6 +295,7 @@ export function course(id: string): Course | null {
     printed: book.page_labels ? (JSON.parse(book.page_labels) as string[]) : null,
     outlineNodes: book.outline_nodes,
     lastUnit: book.last_unit,
+    lastPage: book.last_page,
     units: rows.map((r) => ({
       id: r.id,
       title: r.title,
@@ -315,11 +318,11 @@ export function setDone(bookId: string, unitId: string, done: boolean): void {
     .run(done ? new Date().toISOString() : null, bookId, unitId);
 }
 
-/** Remember where reading stopped, so the shelf can offer to resume. */
-export function setPlace(bookId: string, unitId: string): void {
+/** Remember where reading stopped — unit and page — so a refresh or the shelf can resume. */
+export function setPlace(bookId: string, unitId: string, page: number): void {
   database()
-    .prepare("UPDATE book SET last_unit = ?, opened_at = ? WHERE id = ?")
-    .run(unitId, new Date().toISOString(), bookId);
+    .prepare("UPDATE book SET last_unit = ?, last_page = ?, opened_at = ? WHERE id = ?")
+    .run(unitId, page, new Date().toISOString(), bookId);
 }
 
 export function touch(bookId: string): void {

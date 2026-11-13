@@ -39,30 +39,111 @@ export default function Home() {
     loadShelf();
   }, [loadShelf]);
 
+  /** The page at the top of the reading pane, as the reader last reported it. */
+  const [page, setPage] = useState<number | null>(null);
+
+  /**
+   * A page to put back at the top of the pane on opening, held there until
+   * the reader takes over — see the effect that honours it.
+   */
+  const [restore, setRestore] = useState<number | null>(null);
+
   const open = useCallback(async (id: string) => {
-    const found: Course = await fetch(`/api/book?id=${id}`).then((r) => r.json());
+    const response = await fetch(`/api/book?id=${id}`);
+    if (!response.ok) {
+      // A book named in the URL that has since left the shelf: show the shelf.
+      window.history.replaceState(null, "", window.location.pathname);
+      return;
+    }
+    const found: Course = await response.json();
     const at = found.units.findIndex((u) => u.id === found.lastUnit);
+    const unit = found.units[at === -1 ? 0 : at];
     setCourse(found);
     setCurrent(at === -1 ? 0 : at);
     setFocus(false);
+    setPage(null);
+    setRestore(
+      found.lastPage !== null && unit && found.lastPage >= unit.from && found.lastPage <= unit.to
+        ? found.lastPage
+        : null,
+    );
+    // The open book rides in the URL so a refresh reopens it. The page doesn't:
+    // the database already has it, and the URL would have to pick between the
+    // sheet the system counts and the folio the book prints.
+    window.history.replaceState(null, "", `?book=${id}`);
   }, []);
+
+  // A refresh lands back in the book the URL names, rather than on the shelf.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("book");
+    if (id) open(id);
+  }, [open]);
 
   const close = useCallback(() => {
     setCourse(null);
+    setRestore(null);
+    window.history.replaceState(null, "", window.location.pathname);
     loadShelf();
   }, [loadShelf]);
 
-  // Keep the place, so the shelf can offer to resume. Fire-and-forget: losing
-  // one of these costs a scroll, not a re-ingest.
+  // Keep the place — unit and page — so a refresh or the shelf can resume
+  // there. Fire-and-forget: losing one of these costs a scroll, not a
+  // re-ingest. `keepalive` lets the last one out survive the refresh that
+  // prompted it.
   useEffect(() => {
     const unit = course?.units[current];
-    if (!course || !unit) return;
+    if (!course || !unit || page === null) return;
+    // Between a unit change and the reader's next report, `page` still names a
+    // sheet in the unit just left; saving that pair would resume nowhere.
+    if (page < unit.from || page > unit.to) return;
+    // While a restore is still landing, the only page worth saving is the
+    // restored one — the unit's first page passes through on the way.
+    if (restore !== null && page !== restore) return;
     fetch("/api/progress", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ book: course.id, unit: unit.id }),
+      body: JSON.stringify({ book: course.id, unit: unit.id, page }),
+      keepalive: true,
     }).catch(() => {});
-  }, [course, current]);
+  }, [course, current, page, restore]);
+
+  /**
+   * Put the restored page at the top of the pane, and keep it there until the
+   * reader moves.
+   *
+   * One scroll isn't enough. Every page frame takes its height from
+   * `--page-aspect`, which on a fresh load is the US Letter fallback until the
+   * first page's geometry arrives — so twenty pages in, a 7×9.19 book slides
+   * the target a few hundred pixels down the moment it does. Re-aim whenever
+   * the pages change size, and let go at the first sign of the reader's own
+   * hand, or after a few seconds, whichever comes first.
+   */
+  useEffect(() => {
+    if (restore === null) return;
+    const aim = () =>
+      document.getElementById(`page-${restore}`)?.scrollIntoView({ behavior: "instant", block: "start" });
+    aim();
+
+    const pages = document.querySelector(".pages");
+    const observer = new ResizeObserver(aim);
+    if (pages) observer.observe(pages);
+
+    const release = () => setRestore(null);
+    const timer = setTimeout(release, 4000);
+    const hands = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const event of hands) window.addEventListener(event, release, { passive: true });
+    // Anything that scrolls the pane off the page — a scrollbar drag, a link,
+    // a script — means the reader has moved on, whatever moved them.
+    const pane = document.querySelector(".reader");
+    const moved = () => topPage() !== restore && release();
+    pane?.addEventListener("scroll", moved, { passive: true });
+    return () => {
+      observer.disconnect();
+      clearTimeout(timer);
+      for (const event of hands) window.removeEventListener(event, release);
+      pane?.removeEventListener("scroll", moved);
+    };
+  }, [restore]);
 
   // Which unit's questions are on screen. Ticking a unit off opens them: the
   // questions are the other half of finishing a unit, and burying them behind a
@@ -270,6 +351,7 @@ export default function Home() {
         onDone={(done) => setDone(current, done)}
         onQuiz={() => setQuizzing(course.units[current].id)}
         onFollow={jump}
+        onPage={setPage}
         back={origin?.to === current ? course.units[origin.from].title : null}
         onUnjump={unjump}
       />
@@ -782,6 +864,7 @@ function Reader({
   onDone,
   onQuiz,
   onFollow,
+  onPage,
   back,
   onUnjump,
 }: {
@@ -797,6 +880,8 @@ function Reader({
   onDone: (done: boolean) => void;
   onQuiz: () => void;
   onFollow: (page: number) => void;
+  /** Which page is at the top of the pane, whenever that changes. */
+  onPage: (page: number) => void;
   /** The unit a followed link took you out of, while you're still away from it. */
   back: string | null;
   onUnjump: () => void;
@@ -805,9 +890,32 @@ function Reader({
   const [column, setColumn] = useState(760);
 
   // A new unit means a new stretch of the book — start at its first page.
+  // Reported straight away: scrolling to where you already are fires no event.
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [unit.id]);
+    const top = topPage();
+    if (top !== null) onPage(top);
+  }, [unit.id, onPage]);
+
+  // …and whichever page scrolling brings to the top, at most once a frame.
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const top = topPage();
+        if (top !== null) onPage(top);
+      });
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      element.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [onPage]);
 
   // Zoom 1 means "as wide as the pane allows, up to a comfortable measure", so
   // the multiplier has to be applied to a measured width rather than a constant.
