@@ -137,13 +137,14 @@ export async function writeBrief(request: BriefRequest): Promise<Brief> {
       "the chapter exists, do not pose the question they answer, and do not state any " +
       "definition, distinction or conclusion that appears in them. Return an empty string " +
       "if the unit assumes nothing the reader has not already met.\n\n" +
-      `**objectives** — exactly ${count}. Each is one thing the reader should be able to do ` +
-      "after these pages, phrased as a capability: start with a verb (Explain, Compare, " +
-      "Trace, Derive, Predict). Use the author's own terms for the things involved. One " +
-      "capability per objective — do not bundle two into one with \"and\". If the pages " +
-      `teach more than ${count} load-bearing ideas, pick the ${count} that carry the most ` +
-      "weight and leave the rest to the pages; never mention anything the pages do not " +
-      "teach. No trailing punctuation.\n\n" +
+      `**objectives** — exactly ${count}. Each names a general idea the pages teach — a ` +
+      "mechanism, trade-off or failure mode the reader could spot in a system the book " +
+      "never mentions. The author's examples (a company, a product, a case study) are " +
+      "evidence for an idea, never the objective: not \"Explain how <company> solved " +
+      "<problem>\" but the principle that case illustrates. Start with a verb (Explain, " +
+      "Compare, Predict), use the author's terms, one idea each, no trailing punctuation. " +
+      `If the pages teach more than ${count}, keep the weightiest; never name one they ` +
+      "don't teach.\n\n" +
       `**questions** — exactly ${count}, one per objective, in the same order as the ` +
       "objectives. Each checks whether the reader can actually do the thing that " +
       "objective names, from memory, with the book closed.\n\n" +
